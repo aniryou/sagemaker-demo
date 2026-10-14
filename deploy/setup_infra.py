@@ -1,5 +1,6 @@
-"""Create (idempotently) everything the pipelines need: S3 bucket + data, IAM
-roles, the registry-helper Lambda and the Model Registry group.
+"""Make all the resources that the pipelines use: the S3 bucket and data, the IAM
+roles, the registry-helper Lambda and the Model Registry group. You can run the
+script again. It does not make a second copy of a resource.
 
     python deploy/setup_infra.py
 """
@@ -25,7 +26,7 @@ def policy(*statements: dict) -> dict:
 
 
 def build_policies(names) -> dict:
-    """IAM policies. The champion/challenger authorization model lives here."""
+    """Return the IAM policies. These policies control who can promote a model."""
     packages = f"{names.model_package_arn_prefix}/*"
     bucket_arn = f"arn:aws:s3:::{names.bucket}"
     pipelines = [
@@ -39,10 +40,10 @@ def build_policies(names) -> dict:
         "Action": ["sagemaker:List*", "sagemaker:Describe*", "sagemaker:Search"],
         "Resource": "*",
     }
-    # Explicit denies win over any allow, so these identities can never move an
-    # alias or approve a version even if a broad managed policy is attached.
-    # Scoped to the alias keys: SageMaker Pipelines adds its own bookkeeping tags
-    # to the group when it registers a model, and that must keep working.
+    # An explicit deny is stronger than an allow. Thus, these roles cannot set an
+    # alias or approve a version, also when a broad managed policy is attached.
+    # The deny applies only to the alias keys. SageMaker Pipelines adds its own
+    # tags to the group when it registers a model, and that must continue to work.
     cannot_promote = [
         {
             "Sid": "OnlyPromotersMoveAliases",
@@ -82,8 +83,8 @@ def build_policies(names) -> dict:
             {"Sid": "RegistryHelper", "Effect": "Allow", "Action": "lambda:InvokeFunction", "Resource": names.registry_lambda_arn},
             *cannot_promote,
         ),
-        # Studio is for viewing pipelines/registry and running pipelines. Its
-        # users get the same "cannot promote" denies as data scientists.
+        # Studio users can see the pipelines and the registry, and run pipelines.
+        # They get the same denies as data scientists. Thus, they cannot promote.
         "studio": policy(
             {"Sid": "Artifacts", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"], "Resource": [bucket_arn, f"{bucket_arn}/*"]},
             *cannot_promote,
@@ -130,7 +131,7 @@ def ensure_role(iam, name: str, trust_policy: dict, description: str, inline: di
 
 
 def ensure_promoters_group(iam, names) -> None:
-    """Members of this IAM group are the 'authorized users' who may promote."""
+    """Make the IAM group of authorized users. Only members of this group can promote."""
     try:
         iam.create_group(GroupName=names.promoters_group)
     except iam.exceptions.EntityAlreadyExistsException:
@@ -155,7 +156,7 @@ def ensure_lambda(session, names) -> None:
         client.get_function(FunctionName=names.registry_lambda)
         client.update_function_code(FunctionName=names.registry_lambda, ZipFile=code)
     except client.exceptions.ResourceNotFoundException:
-        for attempt in range(12):  # a new IAM role takes a few seconds to become assumable
+        for attempt in range(12):  # a new IAM role is available to assume after a few seconds
             try:
                 client.create_function(
                     FunctionName=names.registry_lambda,
@@ -189,10 +190,10 @@ def ensure_model_group(session, names) -> None:
 
 
 def ensure_studio(session, names) -> None:
-    """SageMaker Studio domain: the UI for pipeline graphs and the Model Registry.
+    """Make the SageMaker Studio domain. Studio shows the pipeline graphs and the Model Registry.
 
-    Public internet access avoids a NAT gateway, so the domain has no fixed
-    cost. Only running Studio apps/spaces are billed.
+    The domain uses public internet access. Thus, it does not use a NAT gateway
+    and has no fixed cost. AWS bills Studio apps and spaces only while they run.
     """
     sagemaker, ec2 = session.client("sagemaker"), session.client("ec2")
     domains = {d["DomainName"]: d["DomainId"] for d in sagemaker.list_domains()["Domains"]}
@@ -269,7 +270,7 @@ def main() -> None:
         policies["studio"],
         managed=("arn:aws:iam::aws:policy/AmazonSageMakerFullAccess",),
     )
-    time.sleep(10)  # let a newly created role propagate before the domain uses it
+    time.sleep(10)  # wait until AWS makes the new role available to the domain
     ensure_studio(session, names)
 
 

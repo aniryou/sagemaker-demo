@@ -14,6 +14,6 @@ model:
   max_depth: 3
   random_state: 42
 
-# Stamped onto every prediction row; the SageMaker inference pipeline overrides
-# it with the registry version it resolved (kedro run --params model_version=N).
+# Each prediction row records this value. The SageMaker inference pipeline
+# replaces it with the registry version (kedro run --params model_version=N).
 model_version: local

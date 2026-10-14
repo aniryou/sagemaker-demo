@@ -1,4 +1,4 @@
-"""Project pipelines."""
+"""Register the project pipelines."""
 
 from __future__ import annotations
 

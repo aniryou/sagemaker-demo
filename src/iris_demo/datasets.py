@@ -8,11 +8,12 @@ from kedro.io import AbstractDataset
 
 
 class CSVDataset(AbstractDataset):
-    """Local CSV file read and written with plain pandas.
+    """Read and write a local CSV file with pandas.
 
-    Used instead of kedro_datasets.pandas.CSVDataset, which needs pandas >= 1.2,
-    while the SageMaker scikit-learn 1.2-1 image ships pandas 1.1.3. Upgrading
-    pandas in that image breaks its numpy/scikit-learn binaries.
+    The project uses this dataset, not kedro_datasets.pandas.CSVDataset. That
+    dataset requires pandas 1.2 or higher. The SageMaker scikit-learn 1.2-1 image
+    has pandas 1.1.3. A newer pandas in that image causes errors in its numpy and
+    scikit-learn binaries.
     """
 
     def __init__(self, filepath: str):

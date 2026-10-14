@@ -1,4 +1,4 @@
-"""Show, via the IAM policy simulator, which role may move which alias.
+"""Show which role can set which alias. The script uses the IAM policy simulator.
 
     python deploy/check_access.py
 """

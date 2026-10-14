@@ -12,15 +12,15 @@ ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "iris-demo"
 _AWS_KEYS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION")
 
-# Group-level tags that act as movable pointers to a model version.
+# Each alias is a tag on the model package group. The tag value is a model version.
 CHAMPION, CHALLENGER, PREVIOUS_CHAMPION = "champion", "challenger", "previous_champion"
 
 
 def load_aws_env() -> None:
-    """Export only the AWS_* entries of .env; it also holds unrelated secrets.
+    """Export only the AWS_* entries of .env. The file also contains other secrets.
 
-    Skipped when credentials are already chosen through the environment or a
-    profile, so `AWS_PROFILE=promoter python deploy/promote.py ...` works.
+    If the environment already has credentials or a profile, this function does
+    not read .env. Thus, `AWS_PROFILE=promoter python deploy/promote.py ...` works.
     """
     env_file = ROOT / ".env"
     if not env_file.exists() or os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_PROFILE"):

@@ -1,7 +1,8 @@
-"""Runs inside a SageMaker Processing job: unpack the Kedro project, install its
-requirements and execute one Kedro pipeline with the `sagemaker` environment.
+"""Entry point of a SageMaker Processing job.
 
-Uses only the standard library, because it starts before anything is installed.
+The script unpacks the Kedro project, installs its requirements and runs one
+Kedro pipeline with the `sagemaker` environment. The script uses only the
+standard library, because no other package is installed when it starts.
 """
 
 import argparse
@@ -13,8 +14,8 @@ from pathlib import Path
 BASE = Path("/opt/ml/processing")
 PROJECT_TAR = BASE / "input/project/project.tar.gz"
 PROJECT_DIR = Path("/tmp/project")
-MODEL_ARTIFACT = BASE / "model_artifact"  # model.tar.gz from the training job / registry
-MODEL_DIR = BASE / "data/06_models"  # where the Kedro catalog reads/writes model.joblib
+MODEL_ARTIFACT = BASE / "model_artifact"  # model.tar.gz from the training job or the registry
+MODEL_DIR = BASE / "data/06_models"  # the Kedro catalog reads and writes model.joblib here
 
 
 def main() -> None:

@@ -18,11 +18,11 @@ def train_model(train_data: pd.DataFrame, features: list[str], target: str, mode
 def evaluate_model(
     classifier: RandomForestClassifier, test_data: pd.DataFrame, features: list[str], target: str, model: dict
 ) -> dict:
-    """Score on the held-out split.
+    """Calculate the model score on the test split.
 
-    `multiclass_classification_metrics` follows the SageMaker Model Registry
-    model-quality format. `summary` holds the same numbers as strings, because
-    the registry only accepts string metadata on a model version.
+    `multiclass_classification_metrics` uses the model quality format of the
+    SageMaker Model Registry. `summary` contains the same values as strings,
+    because the registry accepts only string metadata on a model version.
     """
     predicted = classifier.predict(test_data[features])
     accuracy = float(accuracy_score(test_data[target], predicted))

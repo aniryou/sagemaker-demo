@@ -1,4 +1,4 @@
-# Local development + deployment (Python 3.9 to match the SageMaker container).
+# Packages for local development and deployment. Use Python 3.9, the same as the SageMaker container.
 -r requirements.txt
 scikit-learn==1.2.1
 numpy<2

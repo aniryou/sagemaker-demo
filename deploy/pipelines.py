@@ -3,10 +3,11 @@
     python deploy/pipelines.py deploy
     python deploy/pipelines.py run train -p ModelParams=model.n_estimators=200,model.max_depth=4
     python deploy/pipelines.py run inference
-    python deploy/pipelines.py run inference -p ModelAlias=challenger   # shadow-score the challenger
+    python deploy/pipelines.py run inference -p ModelAlias=challenger   # shadow test of the challenger
 
-Every compute step is a Processing job that runs `kedro run --pipeline ...`
-(see entrypoint.py), so the Kedro project stays the single source of logic.
+Each compute step runs `kedro run --pipeline ...`. Train is a Training job
+(train_entry.py). The other steps are Processing jobs (entrypoint.py). Thus, all
+ML logic stays in the Kedro project.
 """
 
 from __future__ import annotations
@@ -46,14 +47,14 @@ from sagemaker.workflow.steps import ProcessingStep, TrainingStep
 from common import CHAMPION, PREFIX, ROOT, get_names, get_session, role_arn
 
 SKLEARN_VERSION = "1.2-1"
-INSTANCE_TYPE = "ml.t3.medium"  # Processing steps (the only Processing quota in this account)
+INSTANCE_TYPE = "ml.t3.medium"  # Processing steps. The account has Processing quota only for ml.t3.
 TRAINING_INSTANCE_TYPE = "ml.m5.large"
-DATA = "/opt/ml/processing/data"  # must match conf/sagemaker/globals.yml
+DATA = "/opt/ml/processing/data"  # must be the same as conf/sagemaker/globals.yml
 PROJECT_FILES = ("pyproject.toml", "requirements.txt", "conf/base", "conf/sagemaker", "src/iris_demo")
 
 
 def package_project(session, names) -> str:
-    """Upload the Kedro project as a tarball keyed by content hash; return its S3 URI."""
+    """Upload the Kedro project as a tarball and return its S3 URI. The S3 key contains a content hash."""
     files = sorted(
         path
         for entry in PROJECT_FILES
@@ -73,8 +74,10 @@ def package_project(session, names) -> str:
 
 
 def stage_training_source(target: Path) -> None:
-    """Training jobs take a source dir: the Kedro project plus train_entry.py.
-    The training toolkit pip-installs the requirements.txt it finds there."""
+    """Copy the Kedro project and train_entry.py into the source dir of the Training job.
+
+    The training toolkit installs requirements.txt from this directory with pip.
+    """
     for entry in PROJECT_FILES:
         source = ROOT / entry
         if source.is_dir():
@@ -85,7 +88,7 @@ def stage_training_source(target: Path) -> None:
 
 
 def kedro_step(name, kedro_pipeline, *, ctx, inputs, outputs, params=None, property_files=None):
-    """A Processing step that runs one Kedro pipeline."""
+    """Make a Processing step that runs one Kedro pipeline."""
     processor = SKLearnProcessor(
         framework_version=SKLEARN_VERSION,
         role=ctx["role"],
@@ -177,7 +180,7 @@ def build_train_pipeline(names, ctx) -> Pipeline:
     def metric(path: str) -> JsonGet:
         return JsonGet(step_name=evaluate.name, property_file=evaluation_report, json_path=path)
 
-    # New versions always start unapproved; only a promoter can approve them.
+    # A new version always starts with no approval. Only a promoter can approve it.
     model = Model(
         image_uri=image_uris.retrieve("sklearn", names.region, version=SKLEARN_VERSION),
         model_data=model_artifact,
@@ -250,8 +253,8 @@ def build_inference_pipeline(names, ctx) -> Pipeline:
     input_data = ParameterString("InputDataUri", default_value=f"s3://{names.bucket}/data/inference")
     model_alias = ParameterString("ModelAlias", default_value=CHAMPION, enum_values=["champion", "challenger"])
 
-    # The model is looked up at run time, so promoting a version changes what
-    # the next execution uses without redeploying this pipeline.
+    # The pipeline finds the model when it runs. Thus, a promotion changes the
+    # model of the next execution. You do not deploy this pipeline again.
     resolve = LambdaStep(
         name="ResolveModel",
         lambda_func=Lambda(function_arn=names.registry_lambda_arn, session=ctx["session"]),
@@ -306,7 +309,7 @@ def deploy(session, names) -> None:
         print(f"code     {ctx['code_uri']}")
         for build in (build_train_pipeline, build_inference_pipeline):
             pipeline = build(names, ctx)
-            pipeline.upsert(role_arn=role)  # uploads the training source dir
+            pipeline.upsert(role_arn=role)  # this call uploads the training source dir
             print(f"pipeline {pipeline.name}")
 
 

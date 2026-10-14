@@ -1,10 +1,10 @@
-"""Lambda used by the SageMaker pipelines to read and write registry aliases.
+"""Lambda function that reads and writes registry aliases for the SageMaker pipelines.
 
-Aliases are tags on the model package group whose value is a model version:
-  champion   -> version the inference pipeline uses (only promoters may set it)
-  challenger -> newest version that passed the quality gate (set by training)
+Each alias is a tag on the model package group. The tag value is a model version:
+  champion   -> the version that the inference pipeline uses. Only a promoter can set it.
+  challenger -> the newest version that passed the quality gate. The train pipeline sets it.
 
-This function's role can only write the `challenger` tag.
+The role of this function can write only the `challenger` tag.
 """
 
 import boto3
@@ -21,7 +21,7 @@ def _aliases(group_arn):
 
 
 def resolve(event):
-    """Return the model version an alias points at."""
+    """Return the model version of an alias."""
     group, alias = event["group"], event.get("alias", "champion")
     group_arn = _group_arn(group)
     version = _aliases(group_arn).get(alias)
@@ -43,7 +43,7 @@ def resolve(event):
 
 
 def tag_challenger(event):
-    """Point the `challenger` alias at a freshly registered version."""
+    """Set the `challenger` alias to the version that the pipeline registered."""
     version = event["model_package_arn"].rsplit("/", 1)[1]
     sagemaker.add_tags(ResourceArn=_group_arn(event["group"]), Tags=[{"Key": "challenger", "Value": version}])
     return {"challenger_version": version}

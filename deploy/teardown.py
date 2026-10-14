@@ -48,7 +48,7 @@ def main() -> None:
         if domain["DomainName"] != names.studio_domain:
             continue
         domain_id = domain["DomainId"]
-        # Assumes no Studio apps/spaces are left; delete those in Studio first.
+        # This code does not delete Studio apps or spaces. Delete them in Studio first.
         ignore_missing(sagemaker.delete_user_profile, DomainId=domain_id, UserProfileName=names.studio_user)
         while sagemaker.list_user_profiles(DomainIdEquals=domain_id)["UserProfiles"]:
             time.sleep(10)

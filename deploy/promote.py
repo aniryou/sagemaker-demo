@@ -1,13 +1,14 @@
-"""Champion/challenger control for the iris model registry group.
+"""Control the champion and the challenger of the iris model registry group.
 
     python deploy/promote.py list
     python deploy/promote.py promote              # promote the current challenger
     python deploy/promote.py promote --version 2  # promote a specific version
-    python deploy/promote.py rollback             # back to the previous champion
+    python deploy/promote.py rollback             # go back to the previous champion
 
-Promotion approves the version and moves the `champion` tag on the model
-package group. IAM decides who may do that: run it as the model-promoter role,
-e.g. `AWS_PROFILE=iris-promoter python deploy/promote.py promote`.
+A promotion approves the version and sets the `champion` tag on the model
+package group. IAM controls who can do this. Run the script with the
+model-promoter role, for example:
+`AWS_PROFILE=iris-promoter python deploy/promote.py promote`.
 """
 
 from __future__ import annotations
@@ -86,7 +87,7 @@ def promote(sagemaker, names, version: str | None, force: bool, who: str) -> Non
     if champion_version and champion_version != version and not force:
         candidate_accuracy = accuracy_of(candidate)
         champion_accuracy = accuracy_of(describe_version(sagemaker, names, champion_version))
-        # Comparable because every version is scored on the same fixed test split.
+        # The comparison is correct because each version uses the same fixed test split.
         if candidate_accuracy is None or champion_accuracy is None or candidate_accuracy < champion_accuracy:
             sys.exit(
                 f"Refusing: version {version} accuracy {candidate_accuracy} is below champion "

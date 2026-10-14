@@ -1,20 +1,29 @@
 # Kedro iris on SageMaker Pipelines with champion/challenger promotion
 
-A Kedro project (spaceflights-style layout, iris data) that trains and scores on
-SageMaker Pipelines. Models are versioned in the SageMaker Model Registry, and a
-human with the right IAM role decides which version the inference pipeline uses.
+This Kedro project trains and scores an iris model on SageMaker Pipelines. The
+project uses the Kedro spaceflights layout. The SageMaker Model Registry keeps
+each version of the model. A person with the promoter IAM role selects the
+version that the inference pipeline uses.
 
 ## How it works
 
 ![Kedro iris on SageMaker architecture](docs/architecture/iris-demo-architecture.svg)
 
-Steps 1–5 are the train pipeline, 6–7 the human promotion, 8–11 the inference
-pipeline; the sequence diagram below uses the same numbers. **Snowflake as the
-data source and sink, and the EventBridge schedule, are the target design**: the
-deployed pipelines still read `iris.csv` from and write `predictions.csv` to the
-project S3 bucket, and inference is started on demand with
-`python deploy/pipelines.py run inference`. Diagram source: [`docs/architecture/specs.json`](docs/architecture/specs.json)
-(editable copy: [`iris-demo-architecture.drawio`](docs/architecture/iris-demo-architecture.drawio)).
+The diagram shows three flows:
+
+- Steps 1–5 show the train pipeline.
+- Steps 6–7 show the promotion by a person.
+- Steps 8–11 show the inference pipeline.
+
+The sequence diagram below uses the same step numbers.
+
+**Snowflake and the EventBridge schedule are the target design.** The deployed
+pipelines read `iris.csv` from the project S3 bucket. They write
+`predictions.csv` to the same bucket. To start inference, run
+`python deploy/pipelines.py run inference`.
+
+The diagram source is [`docs/architecture/specs.json`](docs/architecture/specs.json).
+You can edit a copy in draw.io: [`iris-demo-architecture.drawio`](docs/architecture/iris-demo-architecture.drawio).
 
 ### Sequence
 
@@ -38,7 +47,7 @@ sequenceDiagram
         TP->>REG: 4 register version N (PendingManualApproval)
         TP->>REG: 5 TagChallenger sets challenger = N
     else accuracy below threshold
-        TP-->>DS: pipeline fails, nothing registered
+        TP-->>DS: pipeline stops, no new version
     end
     end
 
@@ -48,7 +57,7 @@ sequenceDiagram
     PR->>IAM: 6 assume promoter role
     IAM-->>PR: temporary credentials
     PR->>REG: 7 approve version N, set champion = N
-    Note over REG,PR: Any other role is explicitly denied step 7
+    Note over REG,PR: IAM denies step 7 to all other roles
     end
 
     rect rgb(238, 248, 240)
@@ -60,27 +69,30 @@ sequenceDiagram
         IP->>IP: 10 Score (kedro run -p inference)
         IP->>SF: 11 write PREDICTIONS rows, model_version = N
     else no approved champion
-        IP-->>SCH: execution fails, a promoter must promote first
+        IP-->>SCH: execution stops until a promoter promotes a version
     end
     end
 ```
 
-`ModelAlias = challenger` runs the same inference flow against the challenger
-for shadow scoring; `promote.py rollback` moves `champion` back to
-`previous_champion`.
+With `ModelAlias = challenger`, the inference pipeline scores with the
+challenger. Use this for a shadow test. The command `promote.py rollback` sets
+`champion` to the version in `previous_champion`.
 
-- **Kedro is the only place with ML logic.** Train is a SageMaker Training job
-  (`ml.m5.large`, entry point `deploy/train_entry.py`); the other compute steps
-  are Processing jobs (`ml.t3.medium`, entry point `deploy/entrypoint.py`).
-  Each one runs `kedro run --env sagemaker --pipeline <name>`. `conf/sagemaker`
-  only changes the data root, so the catalog is the same locally and remotely.
-- **Aliases are tags on the model package group**: `champion=<version>` and
-  `challenger=<version>`. SageMaker does not allow tags on individual model
-  versions, and one pointer per alias means there is never more than one champion.
-- **The inference pipeline resolves `champion` at run time**, so a promotion
-  takes effect on the next execution without redeploying anything.
-- **Training never promotes.** A model that passes the quality gate becomes the
-  `challenger` and stays `PendingManualApproval` until a promoter acts.
+- **All ML logic is in Kedro.** The Train step is a SageMaker Training job on
+  `ml.m5.large`. Its entry point is `deploy/train_entry.py`. The other compute
+  steps are Processing jobs on `ml.t3.medium`. Their entry point is
+  `deploy/entrypoint.py`. Each step runs `kedro run --env sagemaker --pipeline <name>`.
+  The `conf/sagemaker` environment changes only the data root. Thus, the
+  catalog is the same on your computer and on SageMaker.
+- **Each alias is a tag on the model package group.** The tags are
+  `champion=<version>` and `challenger=<version>`. SageMaker cannot put tags on
+  a single model version. Each alias has one tag, thus only one champion can
+  exist.
+- **The inference pipeline reads the `champion` tag when it starts.** Thus, a
+  promotion changes the next execution. You do not deploy the pipeline again.
+- **The train pipeline does not promote.** A model that passes the quality gate
+  becomes the `challenger`. Its status is `PendingManualApproval` until a
+  promoter approves it.
 
 ## Who can promote
 
@@ -92,12 +104,20 @@ for shadow scoring; `promote.py rollback` moves `champion` back to
 | `iris-demo-registry-lambda` | no | yes | no | no |
 | `iris-demo-studio-user` (SageMaker Studio) | no (explicit deny) | no | no | yes |
 
-The gate is `sagemaker:AddTags` on the group ARN, restricted with `aws:TagKeys`,
-plus `sagemaker:UpdateModelPackage` for approval. `python deploy/check_access.py`
-prints this table from the live IAM policies.
+IAM controls two actions:
 
-To authorize a person, add their IAM user to the group `iris-demo-model-promoters`
-(it allows assuming the promoter role) and give them a profile:
+- `sagemaker:AddTags` on the group ARN. The condition key `aws:TagKeys` limits
+  which tags a role can set.
+- `sagemaker:UpdateModelPackage`, which approves a version.
+
+The command `python deploy/check_access.py` shows this table from the current
+IAM policies.
+
+To give a person the promoter role:
+
+1. Add the IAM user of the person to the group `iris-demo-model-promoters`.
+   Members of this group can assume the promoter role.
+2. Give the person this AWS profile:
 
 ```ini
 # ~/.aws/config
@@ -106,76 +126,92 @@ role_arn = arn:aws:iam::<account>:role/iris-demo-model-promoter
 source_profile = <their own profile>
 ```
 
-Account administrators and the root user can always change tags; this model
-constrains everyone else.
+Account administrators and the root user can always change tags. These IAM
+rules apply to all other users.
 
 ## Usage
 
 ```bash
+cp .env.sample .env                         # then put your AWS credentials in .env
 uv venv --python 3.9 .venv && uv pip install --python .venv/bin/python -r requirements-dev.txt
 source .venv/bin/activate
 
-kedro run                                   # local: preprocess + train + evaluate
+kedro run                                   # local: preprocess, train, evaluate
 kedro run --pipeline inference              # local: score data/01_raw/iris_batch.csv
 
-python deploy/setup_infra.py                # bucket, IAM, Lambda, registry group (idempotent)
-python deploy/pipelines.py deploy           # package the project, create/update both pipelines
+python deploy/setup_infra.py                # make the bucket, IAM, Lambda, registry group
+python deploy/pipelines.py deploy           # package the project, make or update the pipelines
 
 python deploy/pipelines.py run train
 python deploy/pipelines.py run train -p ModelParams=model.n_estimators=200,model.max_depth=4
-python deploy/promote.py list               # versions, metrics, aliases
-AWS_PROFILE=iris-promoter python deploy/promote.py promote      # challenger -> champion
-python deploy/pipelines.py run inference    # scores with the champion
-python deploy/pipelines.py run inference -p ModelAlias=challenger   # shadow-score the challenger
-AWS_PROFILE=iris-promoter python deploy/promote.py rollback     # previous champion
+python deploy/promote.py list               # show versions, metrics, aliases
+AWS_PROFILE=iris-promoter python deploy/promote.py promote      # make the challenger the champion
+python deploy/pipelines.py run inference    # score with the champion
+python deploy/pipelines.py run inference -p ModelAlias=challenger   # score with the challenger (shadow test)
+AWS_PROFILE=iris-promoter python deploy/promote.py rollback     # go back to the previous champion
 
-python deploy/teardown.py --yes             # delete everything
+python deploy/teardown.py --yes             # delete all project resources
 ```
 
-The deploy scripts read only `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and
-`AWS_REGION` from `.env`, and only when no credentials or `AWS_PROFILE` are
-already set in the environment.
+The deploy scripts read only the AWS values from `.env`: `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION`. The file
+`.env.sample` shows the format. If the environment already has
+credentials or `AWS_PROFILE`, the scripts do not read `.env`.
 
-`promote` refuses a version whose test accuracy is below the champion's unless
-`--force` is given. The comparison is fair because the test split is seeded, so
-every version is scored on the same rows.
+The `promote` command does not promote a version that has a lower test accuracy
+than the champion. To promote it, add `--force`. The comparison is correct
+because the test split uses a fixed seed. Thus, each version gets a score on the
+same rows.
 
 ## Layout
 
 ```
 conf/base            catalog, parameters          conf/sagemaker   data root override
-src/iris_demo        Kedro pipelines: data_processing, data_science, inference
-deploy/pipelines.py  SageMaker pipeline definitions + run command
-deploy/promote.py    list / promote / rollback
+src/iris_demo        Kedro pipelines: data_processing, training, evaluation, inference
+deploy/pipelines.py  SageMaker pipeline definitions and the run command
+deploy/promote.py    list, promote, rollback
 deploy/setup_infra.py, teardown.py, check_access.py
 deploy/entrypoint.py     runs in the Processing containers
 deploy/train_entry.py    runs in the Training container
-deploy/registry_lambda.py  resolves / sets aliases for the pipelines
-docs/architecture    diagram spec + renderer (aniryou/drawing-skills architecture-skill)
+deploy/registry_lambda.py  reads and sets aliases for the pipelines
+docs/architecture    diagram spec and renderer (aniryou/drawing-skills architecture-skill)
 ```
 
-The architecture diagram is generated, never hand-edited: change
-`docs/architecture/specs.json`, then run
-`uv run --no-project --with diagrams python docs/architecture/generate.py docs/architecture/specs.json docs/architecture`.
-The sequence diagram is the Mermaid block above (GitHub renders it inline).
+A script makes the architecture diagram. Do not edit the diagram files. To
+change the diagram:
 
-## Browsing in SageMaker Studio
+1. Edit `docs/architecture/specs.json`.
+2. Run `uv run --no-project --with diagrams python docs/architecture/generate.py docs/architecture/specs.json docs/architecture`.
 
-`setup_infra.py` creates the Studio domain `iris-demo-studio` with a
-`default-user` profile (public internet access, so no NAT gateway and no fixed
-cost). Open it from the console: SageMaker AI -> Domains -> iris-demo-studio ->
-User profiles -> Launch -> Studio. Pipeline graphs are under **Pipelines**; the
-registry is under **Models -> Registered models -> iris-demo-models**. Studio
-users can run pipelines but cannot promote. Only running Studio spaces
-(JupyterLab, Code Editor) are billed; stop them when done.
+The sequence diagram is the Mermaid block above. GitHub shows it in the page.
 
-## Constraints of this account
+## SageMaker Studio
 
-- Training quota exists for `ml.m5.large` (raised on request); Processing
-  quota only for `ml.t3.*`; there is no Transform-job quota, so batch
-  inference runs as a Processing job.
-- Kedro is pip-installed at job start into the stock scikit-learn 1.2-1 image.
-  A custom image with the requirements baked in would start faster.
-- The registered model package holds `model.joblib` only. It is consumed by the
-  batch inference pipeline; deploying it to a real-time endpoint would also need
-  an inference script.
+The script `setup_infra.py` makes the Studio domain `iris-demo-studio`. The
+domain has one user profile, `default-user`. The domain uses public internet
+access. Thus, it does not use a NAT gateway and has no fixed cost.
+
+To open Studio:
+
+1. In the AWS console, go to SageMaker AI > Domains > iris-demo-studio.
+2. Select User profiles > Launch > Studio.
+
+The pipeline graphs are in **Pipelines**. The registry is in
+**Models > Registered models > iris-demo-models**. Studio users can run
+pipelines, but they cannot promote a model.
+
+AWS bills Studio spaces (JupyterLab, Code Editor) only while they run. Stop each
+space after use.
+
+## Limits of this account
+
+- The account has a Training quota for `ml.m5.large`. AWS increased this quota
+  on request.
+- The account has a Processing quota only for `ml.t3.*`.
+- The account has no Transform job quota. Thus, batch inference runs as a
+  Processing job.
+- Each job installs Kedro with pip when it starts. The job uses the standard
+  scikit-learn 1.2-1 image. A custom image with Kedro installed starts faster.
+- The registered model package contains only `model.joblib`. The batch
+  inference pipeline uses this file. A real-time endpoint also requires an
+  inference script.

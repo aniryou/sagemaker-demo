@@ -5,15 +5,15 @@ from sklearn.model_selection import train_test_split
 
 
 def clean_iris(iris_raw: pd.DataFrame, features: list[str], target: str) -> pd.DataFrame:
-    """Keep the modelling columns and drop incomplete rows."""
+    """Keep the model columns and remove the rows that have empty values."""
     return iris_raw[[*features, target]].dropna().reset_index(drop=True)
 
 
 def split_data(iris_clean: pd.DataFrame, target: str, split: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Stratified train/test split.
+    """Divide the data into a train set and a test set with the same class mix.
 
-    The seed is fixed so every model version is scored on the same test rows,
-    which is what makes challenger and champion accuracy comparable.
+    The seed is fixed. Thus, each model version gets a score on the same test
+    rows, and you can compare the accuracy of the challenger and the champion.
     """
     train, test = train_test_split(
         iris_clean,

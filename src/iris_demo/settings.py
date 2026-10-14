@@ -1,2 +1,2 @@
-"""Project settings. Kedro defaults are used throughout (OmegaConfigLoader,
-`conf/base` + `conf/local`, or `conf/sagemaker` when run with --env sagemaker)."""
+"""Project settings. The project uses the Kedro default settings: OmegaConfigLoader,
+`conf/base` and `conf/local`. With --env sagemaker, Kedro uses `conf/sagemaker`."""
