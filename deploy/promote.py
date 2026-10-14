@@ -1,4 +1,6 @@
-"""Control the champion and the challenger of the iris model registry group.
+"""Control the champion of the iris model registry group.
+
+The challenger is the newest version with the status PendingManualApproval.
 
     python deploy/promote.py list
     python deploy/promote.py promote              # promote the current challenger
@@ -18,12 +20,24 @@ import sys
 
 from botocore.exceptions import ClientError
 
-from common import CHALLENGER, CHAMPION, PREVIOUS_CHAMPION, get_names, get_session
+from common import CHAMPION, PREVIOUS_CHAMPION, get_names, get_session
 
 
 def get_aliases(sagemaker, names) -> dict:
     tags = sagemaker.list_tags(ResourceArn=names.model_group_arn)["Tags"]
-    return {tag["Key"]: tag["Value"] for tag in tags if tag["Key"] in (CHAMPION, CHALLENGER, PREVIOUS_CHAMPION)}
+    return {tag["Key"]: tag["Value"] for tag in tags if tag["Key"] in (CHAMPION, PREVIOUS_CHAMPION)}
+
+
+def get_challenger(sagemaker, names) -> str | None:
+    """Return the newest version with the status PendingManualApproval."""
+    pending = sagemaker.list_model_packages(
+        ModelPackageGroupName=names.model_group,
+        ModelApprovalStatus="PendingManualApproval",
+        SortBy="CreationTime",
+        SortOrder="Descending",
+        MaxResults=1,
+    )["ModelPackageSummaryList"]
+    return str(pending[0]["ModelPackageVersion"]) if pending else None
 
 
 def describe_version(sagemaker, names, version: str) -> dict:
@@ -42,6 +56,7 @@ def accuracy_of(package: dict) -> float | None:
 
 def list_versions(sagemaker, names) -> None:
     aliases = get_aliases(sagemaker, names)
+    aliases["challenger"] = get_challenger(sagemaker, names)
     summaries = sagemaker.list_model_packages(
         ModelPackageGroupName=names.model_group, SortBy="CreationTime", SortOrder="Descending"
     )["ModelPackageSummaryList"]
@@ -50,7 +65,7 @@ def list_versions(sagemaker, names) -> None:
         version = str(summary["ModelPackageVersion"])
         package = describe_version(sagemaker, names, version)
         metadata = package.get("CustomerMetadataProperties", {})
-        alias = ", ".join(name for name in (CHAMPION, CHALLENGER) if aliases.get(name) == version)
+        alias = ", ".join(name for name in (CHAMPION, "challenger") if aliases.get(name) == version)
         params = f"trees={metadata.get('n_estimators', '?')} depth={metadata.get('max_depth', '?')}"
         print(
             f"{version:<8}{alias:<22}{package['ModelApprovalStatus']:<24}"
@@ -79,7 +94,7 @@ def set_champion(sagemaker, names, version: str, who: str, reason: str) -> None:
 
 def promote(sagemaker, names, version: str | None, force: bool, who: str) -> None:
     aliases = get_aliases(sagemaker, names)
-    version = version or aliases.get(CHALLENGER)
+    version = version or get_challenger(sagemaker, names)
     if not version:
         sys.exit("No challenger to promote. Run the train pipeline or pass --version.")
     candidate = describe_version(sagemaker, names, version)

@@ -42,8 +42,6 @@ def main() -> None:
         sagemaker.delete_model_package(ModelPackageName=package["ModelPackageArn"])
     ignore_missing(sagemaker.delete_model_package_group, ModelPackageGroupName=names.model_group)
 
-    ignore_missing(session.client("lambda").delete_function, FunctionName=names.registry_lambda)
-
     for domain in sagemaker.list_domains()["Domains"]:
         if domain["DomainName"] != names.studio_domain:
             continue
@@ -54,7 +52,7 @@ def main() -> None:
             time.sleep(10)
         sagemaker.delete_domain(DomainId=domain_id, RetentionPolicy={"HomeEfsFileSystem": "Delete"})
 
-    for role in (names.execution_role, names.lambda_role, names.promoter_role, names.data_scientist_role, names.studio_role):
+    for role in (names.execution_role, names.promoter_role, names.data_scientist_role, names.studio_role):
         try:
             for attached in iam.list_attached_role_policies(RoleName=role)["AttachedPolicies"]:
                 iam.detach_role_policy(RoleName=role, PolicyArn=attached["PolicyArn"])

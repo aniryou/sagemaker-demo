@@ -2,8 +2,8 @@
  {
   "key": "iris-demo",
   "title": "Kedro iris on SageMaker — champion / challenger",
-  "subtitle": "Every compute step runs `kedro run --env sagemaker`. Training registers a challenger; only the promoter role can move the champion tag. Snowflake and the schedule are target design (deployed today: S3, on-demand runs).",
-  "desc": "A data scientist starts the train pipeline (Preprocess, Train, Evaluate). A model that passes the quality gate is registered pending approval and tagged challenger. An authorized promoter assumes the promoter IAM role to approve it and move the champion tag. On a schedule, the inference pipeline resolves the champion tag at run time, scores a batch and writes predictions back to Snowflake.",
+  "subtitle": "Every compute step runs `kedro run --env sagemaker`. Training registers a challenger; Score reads the champion tag that only the promoter role can set. Snowflake and the schedule are target design (deployed today: S3, on-demand runs).",
+  "desc": "A data scientist starts the train pipeline (Preprocess, Train, Evaluate). A model that passes the quality gate is registered pending approval; the newest pending version is the challenger. An authorized promoter assumes the promoter IAM role to approve it and set the champion tag. On a schedule, the Score job reads the champion tag, downloads that model, scores a batch and writes predictions back to Snowflake.",
   "size": {
    "w": 1560,
    "h": 800
@@ -44,15 +44,6 @@
     "title": "Evaluate",
     "sub": "accuracy ≥ threshold",
     "label": "below"
-   },
-   {
-    "key": "tagger",
-    "x": 950,
-    "y": 210,
-    "icon": "lambda",
-    "title": "TagChallenger",
-    "sub": "registry-helper Lambda",
-    "label": "right"
    },
    {
     "key": "reg",
@@ -100,21 +91,12 @@
     "label": "below"
    },
    {
-    "key": "resolve",
-    "x": 560,
-    "y": 500,
-    "icon": "lambda",
-    "title": "ResolveModel",
-    "sub": "registry-helper Lambda",
-    "label": "below"
-   },
-   {
     "key": "score",
     "x": 560,
     "y": 680,
     "icon": "sagemaker",
     "title": "Score",
-    "sub": "Processing · t3.medium",
+    "sub": "Processing · reads champion tag",
     "label": "below"
    },
    {
@@ -135,13 +117,11 @@
      "pre",
      "train",
      "eval",
-     "tagger",
      "reg",
      "iam",
      "studio",
-     "resolve",
-     "score",
-     "scheduler"
+     "scheduler",
+     "score"
     ],
     "pad": 70
    },
@@ -151,16 +131,15 @@
     "nodes": [
      "pre",
      "train",
-     "eval",
-     "tagger"
+     "eval"
     ],
     "pad": 22
    },
    {
-    "label": "iris-demo-inference pipeline",
+    "label": "Scheduled inference",
     "dashed": true,
     "nodes": [
-     "resolve",
+     "scheduler",
      "score"
     ],
     "pad": 22
@@ -175,134 +154,6 @@
     "n": "1",
     "ss": null,
     "ds": null,
-    "via": null
-   },
-   {
-    "s": "pre",
-    "d": "train",
-    "kind": "req",
-    "label": "train/test",
-    "n": "2",
-    "ss": null,
-    "ds": null,
-    "via": null
-   },
-   {
-    "s": "train",
-    "d": "eval",
-    "kind": "req",
-    "label": "model",
-    "n": "3",
-    "ss": null,
-    "ds": null,
-    "via": null
-   },
-   {
-    "s": "eval",
-    "d": "reg",
-    "kind": "req",
-    "label": "register",
-    "n": "4",
-    "ss": "b",
-    "ds": "tl",
-    "via": [
-     [
-      720,
-      420
-     ],
-     [
-      935,
-      420
-     ]
-    ]
-   },
-   {
-    "s": "eval",
-    "d": "tagger",
-    "kind": "sup",
-    "label": "on pass",
-    "n": null,
-    "ss": "r",
-    "ds": "l",
-    "via": null
-   },
-   {
-    "s": "tagger",
-    "d": "reg",
-    "kind": "req",
-    "label": "challenger",
-    "n": "5",
-    "ss": "b",
-    "ds": "tr",
-    "via": null
-   },
-   {
-    "s": "promoter",
-    "d": "iam",
-    "kind": "id",
-    "label": "assume",
-    "n": "6",
-    "ss": "l",
-    "ds": "r",
-    "via": null
-   },
-   {
-    "s": "iam",
-    "d": "reg",
-    "kind": "req",
-    "label": "champion",
-    "n": "7",
-    "ss": "l",
-    "ds": "r",
-    "via": null
-   },
-   {
-    "s": "studio",
-    "d": "reg",
-    "kind": "sup",
-    "label": "browse",
-    "n": null,
-    "ss": "l",
-    "ds": "br",
-    "via": [
-     [
-      1080,
-      680
-     ],
-     [
-      1080,
-      522
-     ]
-    ]
-   },
-   {
-    "s": "scheduler",
-    "d": "resolve",
-    "kind": "req",
-    "label": "start",
-    "n": "8",
-    "ss": "r",
-    "ds": "l",
-    "via": null
-   },
-   {
-    "s": "resolve",
-    "d": "reg",
-    "kind": "req",
-    "label": "read champion",
-    "n": "9",
-    "ss": "r",
-    "ds": "l",
-    "via": null
-   },
-   {
-    "s": "resolve",
-    "d": "score",
-    "kind": "req",
-    "label": "model",
-    "n": "10",
-    "ss": "b",
-    "ds": "t",
     "via": null
    },
    {
@@ -329,11 +180,119 @@
     ]
    },
    {
+    "s": "pre",
+    "d": "train",
+    "kind": "req",
+    "label": "train/test",
+    "n": "2",
+    "ss": null,
+    "ds": null,
+    "via": null
+   },
+   {
+    "s": "train",
+    "d": "eval",
+    "kind": "req",
+    "label": "model",
+    "n": "3",
+    "ss": null,
+    "ds": null,
+    "via": null
+   },
+   {
+    "s": "eval",
+    "d": "reg",
+    "kind": "req",
+    "label": "register challenger",
+    "n": "4",
+    "ss": "r",
+    "ds": "t",
+    "via": [
+     [
+      950,
+      210
+     ]
+    ]
+   },
+   {
+    "s": "promoter",
+    "d": "iam",
+    "kind": "id",
+    "label": "assume",
+    "n": "5",
+    "ss": "l",
+    "ds": "r",
+    "via": null
+   },
+   {
+    "s": "iam",
+    "d": "reg",
+    "kind": "req",
+    "label": "champion",
+    "n": "6",
+    "ss": "l",
+    "ds": "r",
+    "via": null
+   },
+   {
+    "s": "studio",
+    "d": "reg",
+    "kind": "sup",
+    "label": "browse",
+    "n": null,
+    "ss": "l",
+    "ds": "br",
+    "via": [
+     [
+      1080,
+      680
+     ],
+     [
+      1080,
+      522
+     ]
+    ]
+   },
+   {
+    "s": "scheduler",
+    "d": "score",
+    "kind": "req",
+    "label": "start",
+    "n": "7",
+    "ss": "r",
+    "ds": "t",
+    "via": [
+     [
+      560,
+      500
+     ]
+    ]
+   },
+   {
+    "s": "score",
+    "d": "reg",
+    "kind": "req",
+    "label": "read champion",
+    "n": "8",
+    "ss": "r",
+    "ds": "l",
+    "via": [
+     [
+      760,
+      680
+     ],
+     [
+      760,
+      500
+     ]
+    ]
+   },
+   {
     "s": "score",
     "d": "sf",
     "kind": "req",
     "label": "write predictions",
-    "n": "11",
+    "n": "9",
     "ss": "l",
     "ds": "r",
     "via": null

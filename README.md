@@ -11,9 +11,9 @@ version that the inference pipeline uses.
 
 The diagram shows three flows:
 
-- Steps 1–5 show the train pipeline.
-- Steps 6–7 show the promotion by a person.
-- Steps 8–11 show the inference pipeline.
+- Steps 1–4 show the train pipeline.
+- Steps 5–6 show the promotion by a person.
+- Steps 7–9 show the inference pipeline.
 
 The sequence diagram below uses the same step numbers.
 
@@ -39,41 +39,42 @@ sequenceDiagram
     actor PR as Model promoter
 
     rect rgb(240, 246, 255)
-    Note over DS,TP: Train and register a challenger (steps 1-5)
+    Note over DS,TP: Train and register a challenger (steps 1-4)
     DS->>TP: 1 start (ModelParams)
     TP->>SF: Preprocess reads IRIS table
     TP->>TP: 2-3 Train (Training job), Evaluate
     alt accuracy >= threshold
         TP->>REG: 4 register version N (PendingManualApproval)
-        TP->>REG: 5 TagChallenger sets challenger = N
+        Note over TP,REG: The newest pending version is the challenger
     else accuracy below threshold
         TP-->>DS: pipeline stops, no new version
     end
     end
 
     rect rgb(255, 246, 236)
-    Note over REG,PR: Human promotion with promote.py (steps 6-7)
+    Note over REG,PR: Human promotion with promote.py (steps 5-6)
     PR->>REG: list versions and metrics
-    PR->>IAM: 6 assume promoter role
+    PR->>IAM: 5 assume promoter role
     IAM-->>PR: temporary credentials
-    PR->>REG: 7 approve version N, set champion = N
-    Note over REG,PR: IAM denies step 7 to all other roles
+    PR->>REG: 6 approve version N, set champion = N
+    Note over REG,PR: IAM denies step 6 to all other roles
     end
 
     rect rgb(238, 248, 240)
-    Note over SF,REG: Scheduled batch inference (steps 8-11)
-    SCH->>IP: 8 start (ModelAlias = champion)
-    IP->>REG: 9 ResolveModel reads champion tag
+    Note over SF,REG: Scheduled batch inference (steps 7-9)
+    SCH->>IP: 7 start (ModelAlias = champion)
+    IP->>REG: 8 Score job reads champion tag
     alt champion set and Approved
         REG-->>IP: version N and model.tar.gz URI
-        IP->>IP: 10 Score (kedro run -p inference)
-        IP->>SF: 11 write PREDICTIONS rows, model_version = N
+        IP->>IP: Score (kedro run -p inference)
+        IP->>SF: 9 write PREDICTIONS rows, model_version = N
     else no approved champion
         IP-->>SCH: execution stops until a promoter promotes a version
     end
     end
 ```
 
+The challenger is the newest version with the status `PendingManualApproval`.
 With `ModelAlias = challenger`, the inference pipeline scores with the
 challenger. Use this for a shadow test. The command `promote.py rollback` sets
 `champion` to the version in `previous_champion`.
@@ -84,25 +85,26 @@ challenger. Use this for a shadow test. The command `promote.py rollback` sets
   `deploy/entrypoint.py`. Each step runs `kedro run --env sagemaker --pipeline <name>`.
   The `conf/sagemaker` environment changes only the data root. Thus, the
   catalog is the same on your computer and on SageMaker.
-- **Each alias is a tag on the model package group.** The tags are
-  `champion=<version>` and `challenger=<version>`. SageMaker cannot put tags on
-  a single model version. Each alias has one tag, thus only one champion can
-  exist.
-- **The inference pipeline reads the `champion` tag when it starts.** Thus, a
-  promotion changes the next execution. You do not deploy the pipeline again.
+- **The champion is a tag on the model package group.** The tag is
+  `champion=<version>`. SageMaker cannot put tags on a single model version.
+  The group has one `champion` tag, thus only one champion can exist.
+- **The challenger has no tag.** It is the newest version with the status
+  `PendingManualApproval`.
+- **The Score job reads the `champion` tag when it starts.** Then it downloads
+  that model from S3. Thus, a promotion changes the next execution. You do not
+  deploy the pipeline again. The inference pipeline has only this one step.
 - **The train pipeline does not promote.** A model that passes the quality gate
   becomes the `challenger`. Its status is `PendingManualApproval` until a
   promoter approves it.
 
 ## Who can promote
 
-| Role | set `champion` | set `challenger` | approve version | start pipelines |
-|---|---|---|---|---|
-| `iris-demo-model-promoter` | yes | yes | yes | no |
-| `iris-demo-data-scientist` | no (explicit deny) | no | no | yes |
-| `iris-demo-sagemaker-execution` (pipelines run as this) | no (explicit deny) | no | no | yes |
-| `iris-demo-registry-lambda` | no | yes | no | no |
-| `iris-demo-studio-user` (SageMaker Studio) | no (explicit deny) | no | no | yes |
+| Role | set `champion` | approve version | start pipelines |
+|---|---|---|---|
+| `iris-demo-model-promoter` | yes | yes | no |
+| `iris-demo-data-scientist` | no (explicit deny) | no | yes |
+| `iris-demo-sagemaker-execution` (the pipelines use this role) | no (explicit deny) | no | yes |
+| `iris-demo-studio-user` (SageMaker Studio) | no (explicit deny) | no | yes |
 
 IAM controls two actions:
 
@@ -139,7 +141,7 @@ source .venv/bin/activate
 kedro run                                   # local: preprocess, train, evaluate
 kedro run --pipeline inference              # local: score data/01_raw/iris_batch.csv
 
-python deploy/setup_infra.py                # make the bucket, IAM, Lambda, registry group
+python deploy/setup_infra.py                # make the bucket, IAM roles, registry group, Studio
 python deploy/pipelines.py deploy           # package the project, make or update the pipelines
 
 python deploy/pipelines.py run train
@@ -171,9 +173,8 @@ src/iris_demo        Kedro pipelines: data_processing, training, evaluation, inf
 deploy/pipelines.py  SageMaker pipeline definitions and the run command
 deploy/promote.py    list, promote, rollback
 deploy/setup_infra.py, teardown.py, check_access.py
-deploy/entrypoint.py     runs in the Processing containers
+deploy/entrypoint.py     runs in the Processing containers, finds the champion for Score
 deploy/train_entry.py    runs in the Training container
-deploy/registry_lambda.py  reads and sets aliases for the pipelines
 docs/architecture    diagram spec and renderer (aniryou/drawing-skills architecture-skill)
 ```
 

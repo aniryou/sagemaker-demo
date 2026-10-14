@@ -3,7 +3,7 @@
     python deploy/pipelines.py deploy
     python deploy/pipelines.py run train -p ModelParams=model.n_estimators=200,model.max_depth=4
     python deploy/pipelines.py run inference
-    python deploy/pipelines.py run inference -p ModelAlias=challenger   # shadow test of the challenger
+    python deploy/pipelines.py run inference -p ModelAlias=challenger   # shadow test of the newest unapproved version
 
 Each compute step runs `kedro run --pipeline ...`. Train is a Training job
 (train_entry.py). The other steps are Processing jobs (entrypoint.py). Thus, all
@@ -25,7 +25,6 @@ from pathlib import Path
 
 from sagemaker import image_uris
 from sagemaker.inputs import TrainingInput
-from sagemaker.lambda_helper import Lambda
 from sagemaker.model import Model
 from sagemaker.model_metrics import MetricsSource, ModelMetrics
 from sagemaker.processing import ProcessingInput, ProcessingOutput
@@ -36,7 +35,6 @@ from sagemaker.workflow.conditions import ConditionGreaterThanOrEqualTo
 from sagemaker.workflow.execution_variables import ExecutionVariables
 from sagemaker.workflow.fail_step import FailStep
 from sagemaker.workflow.functions import Join, JsonGet
-from sagemaker.workflow.lambda_step import LambdaOutput, LambdaOutputTypeEnum, LambdaStep
 from sagemaker.workflow.model_step import ModelStep
 from sagemaker.workflow.parameters import ParameterFloat, ParameterString
 from sagemaker.workflow.pipeline import Pipeline
@@ -87,7 +85,7 @@ def stage_training_source(target: Path) -> None:
     shutil.copy(ROOT / "deploy/train_entry.py", target / "train_entry.py")
 
 
-def kedro_step(name, kedro_pipeline, *, ctx, inputs, outputs, params=None, property_files=None):
+def kedro_step(name, kedro_pipeline, *, ctx, inputs, outputs, params=None, extra_args=(), property_files=None):
     """Make a Processing step that runs one Kedro pipeline."""
     processor = SKLearnProcessor(
         framework_version=SKLEARN_VERSION,
@@ -96,11 +94,12 @@ def kedro_step(name, kedro_pipeline, *, ctx, inputs, outputs, params=None, prope
         instance_count=1,
         base_job_name=f"{PREFIX}-{name.lower()}",
         sagemaker_session=ctx["session"],
-        env={"KEDRO_DISABLE_TELEMETRY": "1"},
+        env={"KEDRO_DISABLE_TELEMETRY": "1", "AWS_DEFAULT_REGION": ctx["session"].boto_region_name},
     )
     arguments = ["--pipeline", kedro_pipeline]
     if params is not None:
         arguments += ["--params", params]
+    arguments += list(extra_args)
     step_args = processor.run(
         code=str(ROOT / "deploy/entrypoint.py"),
         inputs=[
@@ -212,17 +211,6 @@ def build_train_pipeline(names, ctx) -> Pipeline:
         ),
     )
 
-    tag_challenger = LambdaStep(
-        name="TagChallenger",
-        lambda_func=Lambda(function_arn=names.registry_lambda_arn, session=ctx["session"]),
-        inputs={
-            "action": "tag_challenger",
-            "group": names.model_group,
-            "model_package_arn": register.properties.ModelPackageArn,
-        },
-        outputs=[LambdaOutput("challenger_version", LambdaOutputTypeEnum.String)],
-    )
-
     quality_gate = ConditionStep(
         name="QualityGate",
         conditions=[
@@ -230,7 +218,7 @@ def build_train_pipeline(names, ctx) -> Pipeline:
                 left=metric("multiclass_classification_metrics.accuracy.value"), right=accuracy_threshold
             )
         ],
-        if_steps=[register, tag_challenger],
+        if_steps=[register],
         else_steps=[
             FailStep(
                 name="BelowAccuracyThreshold",
@@ -253,32 +241,14 @@ def build_inference_pipeline(names, ctx) -> Pipeline:
     input_data = ParameterString("InputDataUri", default_value=f"s3://{names.bucket}/data/inference")
     model_alias = ParameterString("ModelAlias", default_value=CHAMPION, enum_values=["champion", "challenger"])
 
-    # The pipeline finds the model when it runs. Thus, a promotion changes the
-    # model of the next execution. You do not deploy this pipeline again.
-    resolve = LambdaStep(
-        name="ResolveModel",
-        lambda_func=Lambda(function_arn=names.registry_lambda_arn, session=ctx["session"]),
-        inputs={"action": "resolve", "group": names.model_group, "alias": model_alias},
-        outputs=[
-            LambdaOutput("model_version", LambdaOutputTypeEnum.String),
-            LambdaOutput("model_package_arn", LambdaOutputTypeEnum.String),
-            LambdaOutput("model_data_url", LambdaOutputTypeEnum.String),
-        ],
-    )
-
+    # The Score job finds the model of the alias when it runs. Thus, a promotion
+    # changes the model of the next execution. You do not deploy this pipeline again.
     score = kedro_step(
         "Score",
         "inference",
         ctx=ctx,
-        params=Join(on="", values=["model_version=", resolve.properties.Outputs["model_version"]]),
-        inputs=[
-            ProcessingInput(
-                input_name="model",
-                source=resolve.properties.Outputs["model_data_url"],
-                destination="/opt/ml/processing/model_artifact",
-            ),
-            ProcessingInput(input_name="batch", source=input_data, destination=f"{DATA}/01_raw"),
-        ],
+        extra_args=["--resolve-alias", model_alias, "--model-group", names.model_group],
+        inputs=[ProcessingInput(input_name="batch", source=input_data, destination=f"{DATA}/01_raw")],
         outputs=[
             ProcessingOutput(
                 output_name="predictions",
@@ -291,7 +261,7 @@ def build_inference_pipeline(names, ctx) -> Pipeline:
     return Pipeline(
         name=names.inference_pipeline,
         parameters=[input_data, model_alias],
-        steps=[resolve, score],
+        steps=[score],
         sagemaker_session=ctx["session"],
     )
 
@@ -333,8 +303,6 @@ def run(session, names, which: str, parameters: dict, wait: bool) -> None:
                 continue
             seen[step["StepName"]] = step["StepStatus"]
             detail = step.get("FailureReason", "")
-            for output in step.get("Metadata", {}).get("Lambda", {}).get("OutputParameters", []):
-                detail += f" {output['Name']}={output['Value']}"
             if "RegisterModel" in step.get("Metadata", {}):
                 detail += f" {step['Metadata']['RegisterModel']['Arn']}"
             print(f"  {step['StepName']:<28} {step['StepStatus']:<10} {detail.strip()}", flush=True)

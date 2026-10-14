@@ -12,8 +12,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "iris-demo"
 _AWS_KEYS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION")
 
-# Each alias is a tag on the model package group. The tag value is a model version.
-CHAMPION, CHALLENGER, PREVIOUS_CHAMPION = "champion", "challenger", "previous_champion"
+# These tags on the model package group contain a model version. The challenger
+# has no tag: it is the newest version with the status PendingManualApproval.
+CHAMPION, PREVIOUS_CHAMPION = "champion", "previous_champion"
 
 
 def load_aws_env() -> None:
@@ -50,10 +51,7 @@ def get_names(session: boto3.Session) -> SimpleNamespace:
         model_package_arn_prefix=f"arn:aws:sagemaker:{region}:{account}:model-package/{group}",
         train_pipeline=f"{PREFIX}-train",
         inference_pipeline=f"{PREFIX}-inference",
-        registry_lambda=f"{PREFIX}-registry-helper",
-        registry_lambda_arn=f"arn:aws:lambda:{region}:{account}:function:{PREFIX}-registry-helper",
         execution_role=f"{PREFIX}-sagemaker-execution",
-        lambda_role=f"{PREFIX}-registry-lambda",
         promoter_role=f"{PREFIX}-model-promoter",
         data_scientist_role=f"{PREFIX}-data-scientist",
         promoters_group=f"{PREFIX}-model-promoters",

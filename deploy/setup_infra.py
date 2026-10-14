@@ -1,5 +1,5 @@
 """Make all the resources that the pipelines use: the S3 bucket and data, the IAM
-roles, the registry-helper Lambda and the Model Registry group. You can run the
+roles, the Model Registry group and the Studio domain. You can run the
 script again. It does not make a second copy of a resource.
 
     python deploy/setup_infra.py
@@ -7,14 +7,12 @@ script again. It does not make a second copy of a resource.
 
 from __future__ import annotations
 
-import io
 import json
 import time
-import zipfile
 
 from botocore.exceptions import ClientError
 
-from common import CHALLENGER, CHAMPION, PREVIOUS_CHAMPION, ROOT, get_names, get_session, role_arn
+from common import CHAMPION, PREVIOUS_CHAMPION, ROOT, get_names, get_session, role_arn
 
 
 def trust(principal: dict) -> dict:
@@ -50,7 +48,7 @@ def build_policies(names) -> dict:
             "Effect": "Deny",
             "Action": ["sagemaker:AddTags", "sagemaker:DeleteTags"],
             "Resource": names.model_group_arn,
-            "Condition": {"ForAnyValue:StringEquals": {"aws:TagKeys": [CHAMPION, PREVIOUS_CHAMPION, CHALLENGER]}},
+            "Condition": {"ForAnyValue:StringEquals": {"aws:TagKeys": [CHAMPION, PREVIOUS_CHAMPION]}},
         },
         {"Sid": "OnlyPromotersApprove", "Effect": "Deny", "Action": "sagemaker:UpdateModelPackage", "Resource": packages},
     ]
@@ -63,7 +61,7 @@ def build_policies(names) -> dict:
                 "Effect": "Allow",
                 "Action": "sagemaker:AddTags",
                 "Resource": names.model_group_arn,
-                "Condition": {"ForAllValues:StringEquals": {"aws:TagKeys": [CHAMPION, PREVIOUS_CHAMPION, CHALLENGER]}},
+                "Condition": {"ForAllValues:StringEquals": {"aws:TagKeys": [CHAMPION, PREVIOUS_CHAMPION]}},
             },
             {"Sid": "ApproveOrRejectVersions", "Effect": "Allow", "Action": "sagemaker:UpdateModelPackage", "Resource": packages},
         ),
@@ -80,7 +78,6 @@ def build_policies(names) -> dict:
         ),
         "execution": policy(
             {"Sid": "Artifacts", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"], "Resource": [bucket_arn, f"{bucket_arn}/*"]},
-            {"Sid": "RegistryHelper", "Effect": "Allow", "Action": "lambda:InvokeFunction", "Resource": names.registry_lambda_arn},
             *cannot_promote,
         ),
         # Studio users can see the pipelines and the registry, and run pipelines.
@@ -88,18 +85,6 @@ def build_policies(names) -> dict:
         "studio": policy(
             {"Sid": "Artifacts", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"], "Resource": [bucket_arn, f"{bucket_arn}/*"]},
             *cannot_promote,
-        ),
-        "lambda": policy(
-            {"Sid": "Logs", "Effect": "Allow", "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], "Resource": f"arn:aws:logs:{names.region}:{names.account}:*"},
-            {"Sid": "ReadAliases", "Effect": "Allow", "Action": ["sagemaker:DescribeModelPackageGroup", "sagemaker:ListTags"], "Resource": names.model_group_arn},
-            {"Sid": "ReadVersions", "Effect": "Allow", "Action": "sagemaker:DescribeModelPackage", "Resource": packages},
-            {
-                "Sid": "SetChallengerOnly",
-                "Effect": "Allow",
-                "Action": "sagemaker:AddTags",
-                "Resource": names.model_group_arn,
-                "Condition": {"ForAllValues:StringEquals": {"aws:TagKeys": [CHALLENGER]}},
-            },
         ),
     }
 
@@ -146,42 +131,12 @@ def ensure_promoters_group(iam, names) -> None:
     print(f"group    {names.promoters_group}")
 
 
-def ensure_lambda(session, names) -> None:
-    client = session.client("lambda")
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.write(ROOT / "deploy/registry_lambda.py", "registry_lambda.py")
-    code = buffer.getvalue()
-    try:
-        client.get_function(FunctionName=names.registry_lambda)
-        client.update_function_code(FunctionName=names.registry_lambda, ZipFile=code)
-    except client.exceptions.ResourceNotFoundException:
-        for attempt in range(12):  # a new IAM role is available to assume after a few seconds
-            try:
-                client.create_function(
-                    FunctionName=names.registry_lambda,
-                    Runtime="python3.12",
-                    Role=role_arn(names, names.lambda_role),
-                    Handler="registry_lambda.handler",
-                    Code={"ZipFile": code},
-                    Timeout=30,
-                    Description="Resolves and sets champion/challenger aliases for the iris demo pipelines",
-                )
-                break
-            except client.exceptions.InvalidParameterValueException:
-                if attempt == 11:
-                    raise
-                time.sleep(5)
-    client.get_waiter("function_active_v2").wait(FunctionName=names.registry_lambda)
-    print(f"lambda   {names.registry_lambda}")
-
-
 def ensure_model_group(session, names) -> None:
     sagemaker = session.client("sagemaker")
     try:
         sagemaker.create_model_package_group(
             ModelPackageGroupName=names.model_group,
-            ModelPackageGroupDescription="Iris classifier. Tags 'champion'/'challenger' hold the version each alias points at.",
+            ModelPackageGroupDescription="Iris classifier. The 'champion' tag contains the version that inference uses.",
         )
     except ClientError as error:
         if "already exists" not in str(error):
@@ -234,16 +189,9 @@ def main() -> None:
         iam,
         names.execution_role,
         trust({"Service": "sagemaker.amazonaws.com"}),
-        "Runs the iris demo SageMaker pipelines. Cannot move champion/challenger aliases.",
+        "Runs the iris demo SageMaker pipelines. Cannot promote a model.",
         policies["execution"],
         managed=("arn:aws:iam::aws:policy/AmazonSageMakerFullAccess",),
-    )
-    ensure_role(
-        iam,
-        names.lambda_role,
-        trust({"Service": "lambda.amazonaws.com"}),
-        "Registry helper Lambda. May only set the challenger alias.",
-        policies["lambda"],
     )
     ensure_role(
         iam,
@@ -261,7 +209,6 @@ def main() -> None:
     )
     ensure_promoters_group(iam, names)
     ensure_model_group(session, names)
-    ensure_lambda(session, names)
     ensure_role(
         iam,
         names.studio_role,
