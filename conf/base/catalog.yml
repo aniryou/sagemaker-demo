@@ -1,0 +1,28 @@
+iris_raw:
+  type: iris_demo.datasets.CSVDataset
+  filepath: ${globals:data_root}/01_raw/iris.csv
+
+train_data:
+  type: iris_demo.datasets.CSVDataset
+  filepath: ${globals:data_root}/05_model_input/train.csv
+
+test_data:
+  type: iris_demo.datasets.CSVDataset
+  filepath: ${globals:data_root}/05_model_input/test.csv
+
+model:
+  type: pickle.PickleDataset
+  filepath: ${globals:data_root}/06_models/model.joblib
+  backend: joblib
+
+evaluation:
+  type: json.JSONDataset
+  filepath: ${globals:data_root}/08_reporting/evaluation.json
+
+inference_input:
+  type: iris_demo.datasets.CSVDataset
+  filepath: ${globals:data_root}/01_raw/iris_batch.csv
+
+predictions:
+  type: iris_demo.datasets.CSVDataset
+  filepath: ${globals:data_root}/07_model_output/predictions.csv

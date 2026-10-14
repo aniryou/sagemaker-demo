@@ -1,0 +1,344 @@
+[
+ {
+  "key": "iris-demo",
+  "title": "Kedro iris on SageMaker — champion / challenger",
+  "subtitle": "Every compute step runs `kedro run --env sagemaker`. Training registers a challenger; only the promoter role can move the champion tag. Snowflake and the schedule are target design (deployed today: S3, on-demand runs).",
+  "desc": "A data scientist starts the train pipeline (Preprocess, Train, Evaluate). A model that passes the quality gate is registered pending approval and tagged challenger. An authorized promoter assumes the promoter IAM role to approve it and move the champion tag. On a schedule, the inference pipeline resolves the champion tag at run time, scores a batch and writes predictions back to Snowflake.",
+  "size": {
+   "w": 1560,
+   "h": 800
+  },
+  "nodes": [
+   {
+    "key": "ds",
+    "x": 70,
+    "y": 210,
+    "icon": "user",
+    "title": "Data scientist",
+    "sub": "starts training",
+    "label": "below"
+   },
+   {
+    "key": "pre",
+    "x": 300,
+    "y": 210,
+    "icon": "sagemaker",
+    "title": "Preprocess",
+    "sub": "Processing · t3.medium",
+    "label": "below"
+   },
+   {
+    "key": "train",
+    "x": 510,
+    "y": 210,
+    "icon": "sagemaker_training",
+    "title": "Train",
+    "sub": "Training job · m5.large",
+    "label": "below"
+   },
+   {
+    "key": "eval",
+    "x": 720,
+    "y": 210,
+    "icon": "sagemaker",
+    "title": "Evaluate",
+    "sub": "accuracy ≥ threshold",
+    "label": "below"
+   },
+   {
+    "key": "tagger",
+    "x": 950,
+    "y": 210,
+    "icon": "lambda",
+    "title": "TagChallenger",
+    "sub": "registry-helper Lambda",
+    "label": "right"
+   },
+   {
+    "key": "reg",
+    "x": 950,
+    "y": 500,
+    "icon": "sagemaker_model",
+    "title": "Model Registry",
+    "sub": "iris-demo-models",
+    "label": "below"
+   },
+   {
+    "key": "iam",
+    "x": 1200,
+    "y": 500,
+    "icon": "iam",
+    "title": "Promoter role",
+    "sub": "only role allowed to promote",
+    "label": "below"
+   },
+   {
+    "key": "promoter",
+    "x": 1440,
+    "y": 500,
+    "icon": "user",
+    "title": "Model promoter",
+    "sub": "promote.py",
+    "label": "below"
+   },
+   {
+    "key": "studio",
+    "x": 1200,
+    "y": 680,
+    "icon": "sagemaker_notebook",
+    "title": "SageMaker Studio",
+    "sub": "browse, cannot promote",
+    "label": "below"
+   },
+   {
+    "key": "scheduler",
+    "x": 330,
+    "y": 500,
+    "icon": "eventbridge",
+    "title": "Scheduled job",
+    "sub": "EventBridge Scheduler",
+    "label": "below"
+   },
+   {
+    "key": "resolve",
+    "x": 560,
+    "y": 500,
+    "icon": "lambda",
+    "title": "ResolveModel",
+    "sub": "registry-helper Lambda",
+    "label": "below"
+   },
+   {
+    "key": "score",
+    "x": 560,
+    "y": 680,
+    "icon": "sagemaker",
+    "title": "Score",
+    "sub": "Processing · t3.medium",
+    "label": "below"
+   },
+   {
+    "key": "sf",
+    "x": 80,
+    "y": 680,
+    "icon": "snowflake",
+    "title": "Snowflake",
+    "sub": "IRIS · PREDICTIONS",
+    "label": "below"
+   }
+  ],
+  "groups": [
+   {
+    "label": "AWS account · us-west-2",
+    "dashed": false,
+    "nodes": [
+     "pre",
+     "train",
+     "eval",
+     "tagger",
+     "reg",
+     "iam",
+     "studio",
+     "resolve",
+     "score",
+     "scheduler"
+    ],
+    "pad": 70
+   },
+   {
+    "label": "iris-demo-train pipeline",
+    "dashed": true,
+    "nodes": [
+     "pre",
+     "train",
+     "eval",
+     "tagger"
+    ],
+    "pad": 22
+   },
+   {
+    "label": "iris-demo-inference pipeline",
+    "dashed": true,
+    "nodes": [
+     "resolve",
+     "score"
+    ],
+    "pad": 22
+   }
+  ],
+  "edges": [
+   {
+    "s": "ds",
+    "d": "pre",
+    "kind": "req",
+    "label": "start",
+    "n": "1",
+    "ss": null,
+    "ds": null,
+    "via": null
+   },
+   {
+    "s": "pre",
+    "d": "train",
+    "kind": "req",
+    "label": "train/test",
+    "n": "2",
+    "ss": null,
+    "ds": null,
+    "via": null
+   },
+   {
+    "s": "train",
+    "d": "eval",
+    "kind": "req",
+    "label": "model",
+    "n": "3",
+    "ss": null,
+    "ds": null,
+    "via": null
+   },
+   {
+    "s": "eval",
+    "d": "reg",
+    "kind": "req",
+    "label": "register",
+    "n": "4",
+    "ss": "b",
+    "ds": "tl",
+    "via": [
+     [
+      720,
+      420
+     ],
+     [
+      935,
+      420
+     ]
+    ]
+   },
+   {
+    "s": "eval",
+    "d": "tagger",
+    "kind": "sup",
+    "label": "on pass",
+    "n": null,
+    "ss": "r",
+    "ds": "l",
+    "via": null
+   },
+   {
+    "s": "tagger",
+    "d": "reg",
+    "kind": "req",
+    "label": "challenger",
+    "n": "5",
+    "ss": "b",
+    "ds": "tr",
+    "via": null
+   },
+   {
+    "s": "promoter",
+    "d": "iam",
+    "kind": "id",
+    "label": "assume",
+    "n": "6",
+    "ss": "l",
+    "ds": "r",
+    "via": null
+   },
+   {
+    "s": "iam",
+    "d": "reg",
+    "kind": "req",
+    "label": "champion",
+    "n": "7",
+    "ss": "l",
+    "ds": "r",
+    "via": null
+   },
+   {
+    "s": "studio",
+    "d": "reg",
+    "kind": "sup",
+    "label": "browse",
+    "n": null,
+    "ss": "l",
+    "ds": "br",
+    "via": [
+     [
+      1080,
+      680
+     ],
+     [
+      1080,
+      522
+     ]
+    ]
+   },
+   {
+    "s": "scheduler",
+    "d": "resolve",
+    "kind": "req",
+    "label": "start",
+    "n": "8",
+    "ss": "r",
+    "ds": "l",
+    "via": null
+   },
+   {
+    "s": "resolve",
+    "d": "reg",
+    "kind": "req",
+    "label": "read champion",
+    "n": "9",
+    "ss": "r",
+    "ds": "l",
+    "via": null
+   },
+   {
+    "s": "resolve",
+    "d": "score",
+    "kind": "req",
+    "label": "model",
+    "n": "10",
+    "ss": "b",
+    "ds": "t",
+    "via": null
+   },
+   {
+    "s": "sf",
+    "d": "pre",
+    "kind": "sup",
+    "label": "read IRIS",
+    "n": null,
+    "ss": "tr",
+    "ds": "b",
+    "via": [
+     [
+      230,
+      656
+     ],
+     [
+      230,
+      320
+     ],
+     [
+      300,
+      320
+     ]
+    ]
+   },
+   {
+    "s": "score",
+    "d": "sf",
+    "kind": "req",
+    "label": "write predictions",
+    "n": "11",
+    "ss": "l",
+    "ds": "r",
+    "via": null
+   }
+  ],
+  "notes": "Diagram source for the README. Edit this spec and re-run generate.py; never hand-edit the generated SVG/PNG."
+ }
+]

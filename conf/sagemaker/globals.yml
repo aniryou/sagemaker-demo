@@ -1,0 +1,3 @@
+# Inside a SageMaker Processing job every step mounts its S3 inputs/outputs
+# under this root, so the catalog is identical locally and on SageMaker.
+data_root: /opt/ml/processing/data

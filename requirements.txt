@@ -1,0 +1,5 @@
+# Installed inside the SageMaker scikit-learn 1.2-1 container (Python 3.9) at
+# job start. pandas, numpy, scikit-learn and joblib come from the image and must
+# not be upgraded there: doing so breaks the image's compiled numpy stack.
+kedro==1.0.0
+kedro-datasets==4.1.0

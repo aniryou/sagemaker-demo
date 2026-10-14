@@ -1,0 +1,19 @@
+features:
+  - sepal_length
+  - sepal_width
+  - petal_length
+  - petal_width
+target: species
+
+split:
+  test_size: 0.2
+  random_state: 42
+
+model:
+  n_estimators: 100
+  max_depth: 3
+  random_state: 42
+
+# Stamped onto every prediction row; the SageMaker inference pipeline overrides
+# it with the registry version it resolved (kedro run --params model_version=N).
+model_version: local
