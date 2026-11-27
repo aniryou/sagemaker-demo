@@ -22,7 +22,7 @@ def ignore_missing(call, **kwargs) -> None:
         call(**kwargs)
     except ClientError as error:
         code = error.response["Error"]["Code"]
-        if code not in ("ResourceNotFound", "ResourceNotFoundException", "NoSuchEntity", "NoSuchBucket", "ValidationException"):
+        if code not in ("ResourceNotFound", "ResourceNotFoundException", "NoSuchEntity", "NoSuchBucket", "ValidationException", "RepositoryNotFoundException"):
             raise
 
 
@@ -55,10 +55,11 @@ def main() -> None:
 
     session = get_session()
     names = get_names(session)
-    sagemaker, iam = session.client("sagemaker"), session.client("iam")
+    sagemaker, iam, ecr = session.client("sagemaker"), session.client("iam"), session.client("ecr")
 
     for pipeline in names.pipelines.values():
         ignore_missing(sagemaker.delete_pipeline, PipelineName=pipeline)
+    ignore_missing(ecr.delete_repository, repositoryName=names.ecr_repository, force=True)
 
     try:
         packages = sagemaker.list_model_packages(ModelPackageGroupName=names.model_group)["ModelPackageSummaryList"]

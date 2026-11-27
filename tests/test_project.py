@@ -31,8 +31,8 @@ def test_sagemaker_environment_uses_s3_and_the_model_registry(monkeypatch):
     with KedroSession.create(project_path=ROOT, env="sagemaker") as session:
         catalog = session.load_context().catalog
         iris_raw = catalog.get("iris_raw")._describe()
-        assert (iris_raw["protocol"], iris_raw["filepath"]) == ("s3", "my-bucket/data/01_raw/iris.csv")
-        assert catalog.get("predictions")._describe()["filepath"] == "my-bucket/data/07_model_output/predictions.csv"
+        assert (iris_raw["protocol"], str(iris_raw["filepath"])) == ("s3", "my-bucket/data/01_raw/iris.csv")
+        assert str(catalog.get("predictions")._describe()["filepath"]) == "my-bucket/data/07_model_output/predictions.csv"
         model = catalog.get("model")._describe()
         assert model["model_package_group"] == "iris-demo-models"
         assert model["model_data_uri"] == "s3://my-bucket/models"

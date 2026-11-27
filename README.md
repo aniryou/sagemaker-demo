@@ -2,9 +2,10 @@
 
 This Kedro project trains, evaluates and scores an iris model on SageMaker.
 Three SageMaker pipelines wrap the three Kedro pipelines `train`, `evaluate`
-and `inference`. The model lives in the SageMaker Model Registry. A Kedro
-dataset registers it and loads it. Thus, all ML logic and all data access stay
-in the Kedro project, and SageMaker only supplies the compute.
+and `inference`. Each pipeline runs the project's own Docker image from ECR.
+The model lives in the SageMaker Model Registry. A Kedro dataset registers it
+and loads it. Thus, all ML logic and all data access stay in the Kedro project,
+and SageMaker only supplies the compute.
 
 ## How it works
 
@@ -63,11 +64,16 @@ sequenceDiagram
     end
 ```
 
-- **Each SageMaker pipeline has one Processing step.** The step runs
-  `kedro run --env sagemaker --pipeline <name>` on `ml.t3.medium`. Its entry
-  point is `deploy/entrypoint.py`. The step has no data inputs and no data
-  outputs. Its only input is the project code. One pipeline parameter,
-  `KedroParams`, goes to `kedro run --params`.
+- **Each SageMaker pipeline has one Processing step.** The step runs the project
+  image on `ml.t3.medium`. The entry point of the image is
+  `kedro run --env sagemaker`, and the step passes `--pipeline <name>` and
+  `--params <KedroParams>`. The step has no inputs and no outputs, and nothing
+  is installed when the job starts.
+- **The image is yours.** The [`Dockerfile`](Dockerfile) starts from
+  `python:3.11-slim`, installs `requirements.txt` and copies the Kedro project.
+  `deploy/build_image.py` builds it and pushes it to ECR. `deploy/pipelines.py deploy`
+  pins the digest of the `latest` image in the pipelines. Thus, a new image
+  changes the pipelines only when you deploy again.
 - **The Kedro catalog does all data access.** `conf/sagemaker/globals.yml` sets
   `data_root` to `s3://<bucket>/data`. The deploy script puts the bucket name
   into the `IRIS_BUCKET` variable of each job. Thus, the catalog is the same on
@@ -109,7 +115,7 @@ the rows that `train` held out.
 
 ```bash
 cp .env.sample .env                         # then put your AWS credentials in .env
-uv venv --python 3.9 .venv && uv pip install --python .venv/bin/python -r requirements-dev.txt
+uv venv --python 3.11 .venv && uv pip install --python .venv/bin/python -r requirements-dev.txt
 source .venv/bin/activate
 
 kedro run                                   # local: train and evaluate with the local data folder
@@ -117,8 +123,9 @@ kedro run --pipeline inference              # local: score data/01_raw/iris_batc
 kedro viz run                               # show the pipelines in the browser
 pytest                                      # unit tests, no AWS account needed
 
-python deploy/setup_infra.py                # make the bucket and data, the IAM roles, the registry group, Studio
-python deploy/pipelines.py deploy           # package the project, make or update the three pipelines
+python deploy/setup_infra.py                # make the bucket and data, the ECR repository, the IAM roles, the registry group, Studio
+python deploy/build_image.py                # build the project image and push it to ECR (needs Docker)
+python deploy/pipelines.py deploy           # make or update the three pipelines with the latest image
 
 python deploy/pipelines.py run train        # register a new champion
 python deploy/pipelines.py run train -p KedroParams=model.n_estimators=200,model.max_depth=4
@@ -137,14 +144,19 @@ After a run, the `run` command prints the result: the champion version and its
 metadata after `train` and `evaluate`, the S3 path of the predictions after
 `inference`.
 
+On a computer without Docker, the package `sagemaker-studio-image-build` builds
+the same Dockerfile in AWS CodeBuild:
+`pip install sagemaker-studio-image-build && sm-docker build . --repository iris-demo:latest`.
+
 ## Layout
 
 ```
+Dockerfile           the project image: python:3.11-slim, requirements.txt, the Kedro project
 conf/base            catalog and parameters       conf/sagemaker   data_root on S3, registry datasets
 src/iris_demo        Kedro pipelines: data_processing, training, evaluation, inference
-src/iris_demo/datasets   CSVDataset, SageMakerModelDataset, SageMakerModelMetricsDataset
+src/iris_demo/datasets   SageMakerModelDataset, SageMakerModelMetricsDataset
+deploy/build_image.py    build the image, push it to ECR
 deploy/pipelines.py  SageMaker pipeline definitions, the deploy and run commands
-deploy/entrypoint.py runs in the Processing container: unpack, pip install, kedro run
 deploy/setup_infra.py, teardown.py
 tests                unit tests with a stubbed SageMaker client
 docs/architecture    diagram spec and renderer (aniryou/drawing-skills architecture-skill)
@@ -182,11 +194,8 @@ space after use.
 
 - The account has a Processing quota only for `ml.t3.*`. All three pipelines
   use `ml.t3.medium`. The iris model trains in seconds.
-- Each job installs Kedro and s3fs with pip when it starts. The job uses the
-  standard scikit-learn 1.2-1 image. A custom image with Kedro and the project
-  installed starts faster and does not need the code input.
-- The image has pandas 1.1.3. Thus, the project has its own `CSVDataset`. The
-  dataset of kedro-datasets needs pandas 1.2.
+- SageMaker Processing instances are x86_64. `build_image.py` builds the image
+  with `--platform linux/amd64`, also on an ARM computer.
 - A model version has only a source URI and no inference container. To use a
   version on a SageMaker endpoint or in a Transform job, add an inference
   specification to it.

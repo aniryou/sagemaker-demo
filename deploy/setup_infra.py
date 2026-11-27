@@ -1,5 +1,5 @@
-"""Make all the resources that the pipelines use: the S3 bucket and data, the IAM
-roles, the Model Registry group and the Studio domain. You can run the script
+"""Make all the resources that the pipelines use: the S3 bucket and data, the ECR
+repository of the image, the IAM roles, the Model Registry group and the Studio domain. You can run the script
 again. It does not make a second copy of a resource.
 
     python deploy/setup_infra.py
@@ -19,8 +19,8 @@ def trust(principal: dict) -> dict:
     return {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": principal, "Action": "sts:AssumeRole"}]}
 
 
-def bucket_policy(names) -> dict:
-    """Read and write access to the project bucket. The Kedro catalog and the code upload use it."""
+def project_policy(names) -> dict:
+    """Read and write access to the project bucket, and pull access to the project image."""
     bucket_arn = f"arn:aws:s3:::{names.bucket}"
     return {
         "Version": "2012-10-17",
@@ -30,9 +30,26 @@ def bucket_policy(names) -> dict:
                 "Effect": "Allow",
                 "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
                 "Resource": [bucket_arn, f"{bucket_arn}/*"],
-            }
+            },
+            {
+                "Sid": "PullProjectImage",
+                "Effect": "Allow",
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer", "ecr:BatchCheckLayerAvailability"],
+                "Resource": names.ecr_repository_arn,
+            },
+            {"Sid": "EcrLogin", "Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
         ],
     }
+
+
+def ensure_ecr_repository(session, names) -> None:
+    """Make the ECR repository of the project image. build_image.py pushes the image into it."""
+    ecr = session.client("ecr")
+    try:
+        ecr.create_repository(repositoryName=names.ecr_repository, imageScanningConfiguration={"scanOnPush": True})
+    except ecr.exceptions.RepositoryAlreadyExistsException:
+        pass
+    print(f"ecr      {names.image_repository}")
 
 
 def ensure_bucket(session, names) -> None:
@@ -115,12 +132,13 @@ def main() -> None:
     sagemaker_full_access = "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
 
     ensure_bucket(session, names)
+    ensure_ecr_repository(session, names)
     ensure_role(
         iam,
         names.execution_role,
         trust({"Service": "sagemaker.amazonaws.com"}),
         "Runs the iris demo SageMaker pipelines. The Kedro jobs register models and set the champion tag.",
-        bucket_policy(names),
+        project_policy(names),
         managed=(sagemaker_full_access,),
     )
     ensure_model_group(session, names)
@@ -129,7 +147,7 @@ def main() -> None:
         names.studio_role,
         trust({"Service": "sagemaker.amazonaws.com"}),
         "SageMaker Studio users: view and run pipelines, browse the registry.",
-        bucket_policy(names),
+        project_policy(names),
         managed=(sagemaker_full_access,),
     )
     time.sleep(10)  # wait until AWS makes the new role available to the domain

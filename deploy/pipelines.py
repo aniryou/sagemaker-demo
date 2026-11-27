@@ -6,61 +6,49 @@
     python deploy/pipelines.py run evaluate
     python deploy/pipelines.py run inference
 
-Each SageMaker pipeline has one Processing step. The step runs the Kedro pipeline
-with the same name: `kedro run --env sagemaker --pipeline <name>`. The Kedro
-catalog reads and writes S3 and the Model Registry. Thus, the SageMaker pipeline
-has no data inputs and no data outputs. Its only input is the project code.
+Each SageMaker pipeline has one Processing step. The step runs the project image
+(see the Dockerfile) with the Kedro pipeline of the same name:
+`kedro run --env sagemaker --pipeline <name>`. The Kedro catalog reads and writes
+S3 and the Model Registry. Thus, the SageMaker pipeline has no inputs and no
+outputs. `deploy` pins the digest of the `latest` image in the pipelines.
 """
 
 from __future__ import annotations
 
 import argparse
-import hashlib
-import io
 import sys
-import tarfile
 import time
 
-from sagemaker.processing import ProcessingInput
-from sagemaker.sklearn.processing import SKLearnProcessor
+from botocore.exceptions import ClientError
+from sagemaker.processing import Processor
 from sagemaker.workflow.parameters import ParameterString
 from sagemaker.workflow.pipeline import Pipeline
 from sagemaker.workflow.pipeline_context import PipelineSession
 from sagemaker.workflow.steps import ProcessingStep
 
-from common import CHAMPION, PIPELINES, PREFIX, ROOT, get_names, get_session, role_arn
+from common import CHAMPION, PIPELINES, PREFIX, get_names, get_session, role_arn
 
-SKLEARN_VERSION = "1.2-1"
 INSTANCE_TYPE = "ml.t3.medium"  # The account has a Processing quota only for ml.t3.
-PROJECT_FILES = ("pyproject.toml", "requirements.txt", "conf/base", "conf/sagemaker", "src/iris_demo")
-PROJECT_INPUT = "/opt/ml/processing/input/project"  # entrypoint.py reads project.tar.gz here
 
 
-def package_project(session, names) -> str:
-    """Upload the Kedro project as a tarball and return its S3 URI. The S3 key contains a content hash."""
-    files = sorted(
-        path
-        for entry in PROJECT_FILES
-        for path in ([ROOT / entry] if (ROOT / entry).is_file() else (ROOT / entry).rglob("*"))
-        if path.is_file() and "__pycache__" not in path.parts
-    )
-    digest = hashlib.sha256()
-    buffer = io.BytesIO()
-    with tarfile.open(fileobj=buffer, mode="w:gz") as tar:
-        for path in files:
-            relative = path.relative_to(ROOT).as_posix()
-            digest.update(relative.encode() + path.read_bytes())
-            tar.add(path, arcname=relative)
-    key = f"code/{digest.hexdigest()[:12]}/project.tar.gz"
-    session.client("s3").put_object(Bucket=names.bucket, Key=key, Body=buffer.getvalue())
-    return f"s3://{names.bucket}/{key}"
+def resolve_image(session, names) -> str:
+    """Return the image URI with the digest of the `latest` tag, for example <repository>@sha256:..."""
+    try:
+        details = session.client("ecr").describe_images(
+            repositoryName=names.ecr_repository, imageIds=[{"imageTag": "latest"}]
+        )["imageDetails"][0]
+    except ClientError as error:
+        if error.response["Error"]["Code"] in ("RepositoryNotFoundException", "ImageNotFoundException"):
+            sys.exit(f"No image '{names.image_repository}:latest' in ECR. Run: python deploy/build_image.py")
+        raise
+    return f"{names.image_repository}@{details['imageDigest']}"
 
 
 def build_pipeline(name: str, names, ctx) -> Pipeline:
     """Make the SageMaker pipeline that runs the Kedro pipeline `name`."""
     kedro_params = ParameterString("KedroParams", default_value="")  # for example: model.n_estimators=200
-    processor = SKLearnProcessor(
-        framework_version=SKLEARN_VERSION,
+    processor = Processor(
+        image_uri=ctx["image_uri"],  # its entry point is `kedro run --env sagemaker`
         role=ctx["role"],
         instance_type=INSTANCE_TYPE,
         instance_count=1,
@@ -69,14 +57,9 @@ def build_pipeline(name: str, names, ctx) -> Pipeline:
         env={
             "IRIS_BUCKET": names.bucket,  # conf/sagemaker/globals.yml reads it
             "AWS_DEFAULT_REGION": names.region,
-            "KEDRO_DISABLE_TELEMETRY": "1",
         },
     )
-    step_args = processor.run(
-        code=str(ROOT / "deploy/entrypoint.py"),
-        inputs=[ProcessingInput(input_name="project", source=ctx["code_uri"], destination=PROJECT_INPUT)],
-        arguments=["--pipeline", name, "--params", kedro_params],
-    )
+    step_args = processor.run(arguments=["--pipeline", name, "--params", kedro_params])
     return Pipeline(
         name=names.pipelines[name],
         parameters=[kedro_params],
@@ -90,9 +73,9 @@ def deploy(session, names) -> None:
     ctx = {
         "session": PipelineSession(boto_session=session, default_bucket=names.bucket),
         "role": role,
-        "code_uri": package_project(session, names),
+        "image_uri": resolve_image(session, names),
     }
-    print(f"code     {ctx['code_uri']}")
+    print(f"image    {ctx['image_uri']}")
     for name in PIPELINES:
         pipeline = build_pipeline(name, names, ctx)
         pipeline.upsert(role_arn=role)
@@ -153,7 +136,7 @@ def run(session, names, which: str, parameters: dict, wait: bool) -> None:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     commands = parser.add_subparsers(dest="command", required=True)
-    commands.add_parser("deploy", help="package the Kedro project and create or update the three pipelines")
+    commands.add_parser("deploy", help="create or update the three pipelines with the latest image")
     run_parser = commands.add_parser("run", help="start a pipeline execution and wait for it")
     run_parser.add_argument("pipeline", choices=PIPELINES)
     run_parser.add_argument("-p", "--param", action="append", default=[], metavar="NAME=VALUE")
