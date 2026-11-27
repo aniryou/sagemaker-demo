@@ -15,11 +15,12 @@ def test_local_round_trip_makes_the_parent_folders(tmp_path):
 
 def test_remote_filesystem_round_trip():
     # fsspec resolves the protocol. On SageMaker the protocol is s3.
-    dataset = CSVDataset(filepath="memory://bucket/data/01_raw/iris.csv", save_args={"index": False})
+    dataset = CSVDataset(filepath="memory:///bucket/data/01_raw/iris.csv", save_args={"index": False})
     dataset.save(FRAME)
     pd.testing.assert_frame_equal(dataset.load(), FRAME)
+    # Like kedro-datasets, the description shows the path without its protocol.
     assert dataset._describe() == {
-        "filepath": "memory://bucket/data/01_raw/iris.csv",
+        "filepath": "/bucket/data/01_raw/iris.csv",
         "protocol": "memory",
         "load_args": {},
         "save_args": {"index": False},

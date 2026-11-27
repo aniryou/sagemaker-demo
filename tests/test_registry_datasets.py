@@ -43,6 +43,7 @@ def describe_package_response(**extra) -> dict:
         "ModelPackageGroupName": GROUP,
         "CreationTime": datetime(2026, 1, 1),
         "ModelPackageStatus": "Completed",
+        "ModelPackageStatusDetails": {"ValidationStatuses": []},
         "ModelApprovalStatus": "Approved",
         "CreatedBy": {},
         **extra,
