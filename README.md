@@ -1,9 +1,10 @@
-# Kedro iris on SageMaker Pipelines with champion/challenger promotion
+# Kedro iris on SageMaker Pipelines
 
-This Kedro project trains and scores an iris model on SageMaker Pipelines. The
-project uses the Kedro spaceflights layout. The SageMaker Model Registry keeps
-each version of the model. A person with the promoter IAM role selects the
-version that the inference pipeline uses.
+This Kedro project trains, evaluates and scores an iris model on SageMaker.
+Three SageMaker pipelines wrap the three Kedro pipelines `train`, `evaluate`
+and `inference`. The model lives in the SageMaker Model Registry. A Kedro
+dataset registers it and loads it. Thus, all ML logic and all data access stay
+in the Kedro project, and SageMaker only supplies the compute.
 
 ## How it works
 
@@ -11,15 +12,15 @@ version that the inference pipeline uses.
 
 The diagram shows three flows:
 
-- Steps 1–4 show the train pipeline.
-- Steps 5–6 show the promotion by a person.
-- Steps 7–9 show the inference pipeline.
+- Steps 1–2 show the train pipeline.
+- Steps 3–4 show the evaluate pipeline.
+- Steps 5–7 show the inference pipeline.
 
 The sequence diagram below uses the same step numbers.
 
 **Snowflake and the EventBridge schedule are the target design.** The deployed
-pipelines read `iris.csv` from the project S3 bucket. They write
-`predictions.csv` to the same bucket. To start inference, run
+pipelines read `iris.csv` and `iris_batch.csv` from the project S3 bucket and
+write `predictions.csv` to the same bucket. To start inference, run
 `python deploy/pipelines.py run inference`.
 
 The diagram source is [`docs/architecture/specs.json`](docs/architecture/specs.json).
@@ -30,106 +31,79 @@ You can edit a copy in draw.io: [`iris-demo-architecture.drawio`](docs/architect
 ```mermaid
 sequenceDiagram
     actor DS as Data scientist
-    participant SF as Snowflake (target)
-    participant TP as Train pipeline
+    participant TP as iris-demo-train
+    participant EP as iris-demo-evaluate
     participant SCH as Scheduled job (target)
-    participant IP as Inference pipeline
+    participant IP as iris-demo-inference
+    participant S3 as S3 bucket (catalog data_root)
     participant REG as Model Registry
-    participant IAM as Promoter role
-    actor PR as Model promoter
 
     rect rgb(240, 246, 255)
-    Note over DS,TP: Train and register a challenger (steps 1-4)
-    DS->>TP: 1 start (ModelParams)
-    TP->>SF: Preprocess reads IRIS table
-    TP->>TP: 2-3 Train (Training job), Evaluate
-    alt accuracy >= threshold
-        TP->>REG: 4 register version N (PendingManualApproval)
-        Note over TP,REG: The newest pending version is the challenger
-    else accuracy below threshold
-        TP-->>DS: pipeline stops, no new version
-    end
+    Note over DS,REG: Train (steps 1-2): kedro run --pipeline train
+    DS->>TP: 1 start (KedroParams)
+    TP->>S3: read 01_raw/iris.csv, write 05_model_input
+    TP->>S3: write models/<time>/model.joblib
+    TP->>REG: 2 register version N from that file, tag champion = N
     end
 
     rect rgb(255, 246, 236)
-    Note over REG,PR: Human promotion with promote.py (steps 5-6)
-    PR->>REG: list versions and metrics
-    PR->>IAM: 5 assume promoter role
-    IAM-->>PR: temporary credentials
-    PR->>REG: 6 approve version N, set champion = N
-    Note over REG,PR: IAM denies step 6 to all other roles
+    Note over DS,REG: Evaluate (steps 3-4): kedro run --pipeline evaluate
+    DS->>EP: 3 start
+    EP->>REG: load champion (version N)
+    EP->>S3: read 01_raw/iris.csv, split with the fixed seed
+    EP->>REG: 4 store accuracy and weighted_f1 as metadata of version N
     end
 
     rect rgb(238, 248, 240)
-    Note over SF,REG: Scheduled batch inference (steps 7-9)
-    SCH->>IP: 7 start (ModelAlias = champion)
-    IP->>REG: 8 Score job reads champion tag
-    alt champion set and Approved
-        REG-->>IP: version N and model.tar.gz URI
-        IP->>IP: Score (kedro run -p inference)
-        IP->>SF: 9 write PREDICTIONS rows, model_version = N
-    else no approved champion
-        IP-->>SCH: execution stops until a promoter promotes a version
-    end
+    Note over SCH,REG: Inference (steps 5-7): kedro run --pipeline inference
+    SCH->>IP: 5 start
+    IP->>REG: 6 load champion (version N)
+    IP->>S3: read 01_raw/iris_batch.csv
+    IP->>S3: 7 write 07_model_output/predictions.csv
     end
 ```
 
-The challenger is the newest version with the status `PendingManualApproval`.
-With `ModelAlias = challenger`, the inference pipeline scores with the
-challenger. Use this for a shadow test. The command `promote.py rollback` sets
-`champion` to the version in `previous_champion`.
+- **Each SageMaker pipeline has one Processing step.** The step runs
+  `kedro run --env sagemaker --pipeline <name>` on `ml.t3.medium`. Its entry
+  point is `deploy/entrypoint.py`. The step has no data inputs and no data
+  outputs. Its only input is the project code. One pipeline parameter,
+  `KedroParams`, goes to `kedro run --params`.
+- **The Kedro catalog does all data access.** `conf/sagemaker/globals.yml` sets
+  `data_root` to `s3://<bucket>/data`. The deploy script puts the bucket name
+  into the `IRIS_BUCKET` variable of each job. Thus, the catalog is the same on
+  your computer and on SageMaker, and a different source, for example a
+  Snowflake table, is a change in the catalog only.
+- **The model is a Kedro dataset.** `SageMakerModelDataset` in
+  [`src/iris_demo/datasets`](src/iris_demo/datasets) writes the model with
+  joblib to S3, registers a new version in the model package group with that
+  file as its source, and sets the tag `champion=<version>` on the group. On
+  load, it reads the version in the tag and downloads the file. The registry
+  entry has no inference container, because Kedro runs the inference.
+- **The metrics are a Kedro dataset.** `SageMakerModelMetricsDataset` stores the
+  result of `evaluate_model` as metadata of the champion version. The Model
+  Registry shows the metadata next to the version.
+- **The tags are on the model package group.** SageMaker cannot put a tag on a
+  single version. The group has one `champion` tag, thus only one champion
+  exists. The datasets have `save_args` and `load_args` with a `tag`
+  parameter. This project saves with `champion` and loads `champion`.
+- **Train always sets the champion.** Evaluate and inference always use the
+  champion. There is no manual promotion step.
 
-- **All ML logic is in Kedro.** The Train step is a SageMaker Training job on
-  `ml.m5.large`. Its entry point is `deploy/train_entry.py`. The other compute
-  steps are Processing jobs on `ml.t3.medium`. Their entry point is
-  `deploy/entrypoint.py`. Each step runs `kedro run --env sagemaker --pipeline <name>`.
-  The `conf/sagemaker` environment changes only the data root. Thus, the
-  catalog is the same on your computer and on SageMaker.
-- **The champion is a tag on the model package group.** The tag is
-  `champion=<version>`. SageMaker cannot put tags on a single model version.
-  The group has one `champion` tag, thus only one champion can exist.
-- **The challenger has no tag.** It is the newest version with the status
-  `PendingManualApproval`.
-- **The Score job reads the `champion` tag when it starts.** Then it downloads
-  that model from S3. Thus, a promotion changes the next execution. You do not
-  deploy the pipeline again. The inference pipeline has only this one step.
-- **The train pipeline does not promote.** A model that passes the quality gate
-  becomes the `challenger`. Its status is `PendingManualApproval` until a
-  promoter approves it.
+## Kedro pipelines
 
-## Who can promote
+| Kedro pipeline | Nodes | SageMaker pipeline | Reads | Writes |
+|---|---|---|---|---|
+| `train` | clean_iris, split_data, train_model | `iris-demo-train` | `iris_raw` | `model` (registry) |
+| `evaluate` | clean_iris, split_data, evaluate_model | `iris-demo-evaluate` | `iris_raw`, `model` | `evaluation` (registry metadata) |
+| `inference` | predict | `iris-demo-inference` | `inference_input`, `model` | `predictions` |
 
-| Role | set `champion` | approve version | start pipelines |
-|---|---|---|---|
-| `iris-demo-model-promoter` | yes | yes | no |
-| `iris-demo-data-scientist` | no (explicit deny) | no | yes |
-| `iris-demo-sagemaker-execution` (the pipelines use this role) | no (explicit deny) | no | yes |
-| `iris-demo-studio-user` (SageMaker Studio) | no (explicit deny) | no | yes |
+`__default__` runs `train` and `evaluate` together for local work. The `evaluate`
+pipeline repeats the split. The split has a fixed seed, thus the test rows are
+the rows that `train` held out.
 
-IAM controls two actions:
-
-- `sagemaker:AddTags` on the group ARN. The condition key `aws:TagKeys` limits
-  which tags a role can set.
-- `sagemaker:UpdateModelPackage`, which approves a version.
-
-The command `python deploy/check_access.py` shows this table from the current
-IAM policies.
-
-To give a person the promoter role:
-
-1. Add the IAM user of the person to the group `iris-demo-model-promoters`.
-   Members of this group can assume the promoter role.
-2. Give the person this AWS profile:
-
-```ini
-# ~/.aws/config
-[profile iris-promoter]
-role_arn = arn:aws:iam::<account>:role/iris-demo-model-promoter
-source_profile = <their own profile>
-```
-
-Account administrators and the root user can always change tags. These IAM
-rules apply to all other users.
+| `kedro viz` of `train` | `evaluate` | `inference` |
+|---|---|---|
+| ![train](docs/kedro-viz/kedro-viz-train.png) | ![evaluate](docs/kedro-viz/kedro-viz-evaluate.png) | ![inference](docs/kedro-viz/kedro-viz-inference.png) |
 
 ## Usage
 
@@ -138,44 +112,43 @@ cp .env.sample .env                         # then put your AWS credentials in .
 uv venv --python 3.9 .venv && uv pip install --python .venv/bin/python -r requirements-dev.txt
 source .venv/bin/activate
 
-kedro run                                   # local: preprocess, train, evaluate
+kedro run                                   # local: train and evaluate with the local data folder
 kedro run --pipeline inference              # local: score data/01_raw/iris_batch.csv
+kedro viz run                               # show the pipelines in the browser
+pytest                                      # unit tests, no AWS account needed
 
-python deploy/setup_infra.py                # make the bucket, IAM roles, registry group, Studio
-python deploy/pipelines.py deploy           # package the project, make or update the pipelines
+python deploy/setup_infra.py                # make the bucket and data, the IAM roles, the registry group, Studio
+python deploy/pipelines.py deploy           # package the project, make or update the three pipelines
 
-python deploy/pipelines.py run train
-python deploy/pipelines.py run train -p ModelParams=model.n_estimators=200,model.max_depth=4
-python deploy/promote.py list               # show versions, metrics, aliases
-AWS_PROFILE=iris-promoter python deploy/promote.py promote      # make the challenger the champion
+python deploy/pipelines.py run train        # register a new champion
+python deploy/pipelines.py run train -p KedroParams=model.n_estimators=200,model.max_depth=4
+python deploy/pipelines.py run evaluate     # store the metrics of the champion in the registry
 python deploy/pipelines.py run inference    # score with the champion
-python deploy/pipelines.py run inference -p ModelAlias=challenger   # score with the challenger (shadow test)
-AWS_PROFILE=iris-promoter python deploy/promote.py rollback     # go back to the previous champion
 
 python deploy/teardown.py --yes             # delete all project resources
 ```
 
 The deploy scripts read only the AWS values from `.env`: `AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` and `AWS_REGION`. The file
-`.env.sample` shows the format. If the environment already has
-credentials or `AWS_PROFILE`, the scripts do not read `.env`.
+`.env.sample` shows the format. If the environment already has credentials or
+`AWS_PROFILE`, the scripts do not read `.env`.
 
-The `promote` command does not promote a version that has a lower test accuracy
-than the champion. To promote it, add `--force`. The comparison is correct
-because the test split uses a fixed seed. Thus, each version gets a score on the
-same rows.
+After a run, the `run` command prints the result: the champion version and its
+metadata after `train` and `evaluate`, the S3 path of the predictions after
+`inference`.
 
 ## Layout
 
 ```
-conf/base            catalog, parameters          conf/sagemaker   data root override
+conf/base            catalog and parameters       conf/sagemaker   data_root on S3, registry datasets
 src/iris_demo        Kedro pipelines: data_processing, training, evaluation, inference
-deploy/pipelines.py  SageMaker pipeline definitions and the run command
-deploy/promote.py    list, promote, rollback
-deploy/setup_infra.py, teardown.py, check_access.py
-deploy/entrypoint.py     runs in the Processing containers, finds the champion for Score
-deploy/train_entry.py    runs in the Training container
+src/iris_demo/datasets   CSVDataset, SageMakerModelDataset, SageMakerModelMetricsDataset
+deploy/pipelines.py  SageMaker pipeline definitions, the deploy and run commands
+deploy/entrypoint.py runs in the Processing container: unpack, pip install, kedro run
+deploy/setup_infra.py, teardown.py
+tests                unit tests with a stubbed SageMaker client
 docs/architecture    diagram spec and renderer (aniryou/drawing-skills architecture-skill)
+docs/kedro-viz       screenshots of kedro viz
 ```
 
 A script makes the architecture diagram. Do not edit the diagram files. To
@@ -198,21 +171,22 @@ To open Studio:
 2. Select User profiles > Launch > Studio.
 
 The pipeline graphs are in **Pipelines**. The registry is in
-**Models > Registered models > iris-demo-models**. Studio users can run
-pipelines, but they cannot promote a model.
+**Models > Registered models > iris-demo-models**. Each version shows its
+source file, its approval status and the metrics in its metadata. The group
+shows the `champion` tag.
 
 AWS bills Studio spaces (JupyterLab, Code Editor) only while they run. Stop each
 space after use.
 
 ## Limits of this account
 
-- The account has a Training quota for `ml.m5.large`. AWS increased this quota
-  on request.
-- The account has a Processing quota only for `ml.t3.*`.
-- The account has no Transform job quota. Thus, batch inference runs as a
-  Processing job.
-- Each job installs Kedro with pip when it starts. The job uses the standard
-  scikit-learn 1.2-1 image. A custom image with Kedro installed starts faster.
-- The registered model package contains only `model.joblib`. The batch
-  inference pipeline uses this file. A real-time endpoint also requires an
-  inference script.
+- The account has a Processing quota only for `ml.t3.*`. All three pipelines
+  use `ml.t3.medium`. The iris model trains in seconds.
+- Each job installs Kedro and s3fs with pip when it starts. The job uses the
+  standard scikit-learn 1.2-1 image. A custom image with Kedro and the project
+  installed starts faster and does not need the code input.
+- The image has pandas 1.1.3. Thus, the project has its own `CSVDataset`. The
+  dataset of kedro-datasets needs pandas 1.2.
+- A model version has only a source URI and no inference container. To use a
+  version on a SageMaker endpoint or in a Transform job, add an inference
+  specification to it.
