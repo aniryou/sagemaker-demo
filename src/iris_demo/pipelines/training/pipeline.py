@@ -1,6 +1,6 @@
 from kedro.pipeline import Pipeline, node
 
-from .nodes import evaluate_model, train_model
+from .nodes import train_model
 
 
 def create_pipeline(**kwargs) -> Pipeline:
@@ -11,12 +11,6 @@ def create_pipeline(**kwargs) -> Pipeline:
                 inputs=["train_data", "params:features", "params:target", "params:model"],
                 outputs="model",
                 name="train_model",
-            ),
-            node(
-                evaluate_model,
-                inputs=["model", "test_data", "params:features", "params:target", "params:model"],
-                outputs="evaluation",
-                name="evaluate_model",
             ),
         ]
     )

@@ -10,7 +10,11 @@ import time
 
 from botocore.exceptions import ClientError
 
-from common import get_names, get_session
+from common import PREFIX, get_names, get_session
+
+# Resources of earlier versions of this project. The script deletes them too, if they exist.
+LEGACY_ROLES = (f"{PREFIX}-model-promoter", f"{PREFIX}-data-scientist")
+LEGACY_GROUP = f"{PREFIX}-model-promoters"
 
 
 def ignore_missing(call, **kwargs) -> None:
@@ -22,6 +26,28 @@ def ignore_missing(call, **kwargs) -> None:
             raise
 
 
+def delete_role(iam, role: str) -> None:
+    try:
+        for attached in iam.list_attached_role_policies(RoleName=role)["AttachedPolicies"]:
+            iam.detach_role_policy(RoleName=role, PolicyArn=attached["PolicyArn"])
+        for inline in iam.list_role_policies(RoleName=role)["PolicyNames"]:
+            iam.delete_role_policy(RoleName=role, PolicyName=inline)
+        iam.delete_role(RoleName=role)
+    except iam.exceptions.NoSuchEntityException:
+        pass
+
+
+def delete_group(iam, group: str) -> None:
+    try:
+        for user in iam.get_group(GroupName=group)["Users"]:
+            iam.remove_user_from_group(GroupName=group, UserName=user["UserName"])
+        for policy in iam.list_group_policies(GroupName=group)["PolicyNames"]:
+            iam.delete_group_policy(GroupName=group, PolicyName=policy)
+        iam.delete_group(GroupName=group)
+    except iam.exceptions.NoSuchEntityException:
+        pass
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--yes", action="store_true", required=True, help="confirm deletion")
@@ -31,7 +57,7 @@ def main() -> None:
     names = get_names(session)
     sagemaker, iam = session.client("sagemaker"), session.client("iam")
 
-    for pipeline in (names.train_pipeline, names.inference_pipeline):
+    for pipeline in names.pipelines.values():
         ignore_missing(sagemaker.delete_pipeline, PipelineName=pipeline)
 
     try:
@@ -52,23 +78,9 @@ def main() -> None:
             time.sleep(10)
         sagemaker.delete_domain(DomainId=domain_id, RetentionPolicy={"HomeEfsFileSystem": "Delete"})
 
-    for role in (names.execution_role, names.promoter_role, names.data_scientist_role, names.studio_role):
-        try:
-            for attached in iam.list_attached_role_policies(RoleName=role)["AttachedPolicies"]:
-                iam.detach_role_policy(RoleName=role, PolicyArn=attached["PolicyArn"])
-            for inline in iam.list_role_policies(RoleName=role)["PolicyNames"]:
-                iam.delete_role_policy(RoleName=role, PolicyName=inline)
-            iam.delete_role(RoleName=role)
-        except iam.exceptions.NoSuchEntityException:
-            pass
-
-    try:
-        for user in iam.get_group(GroupName=names.promoters_group)["Users"]:
-            iam.remove_user_from_group(GroupName=names.promoters_group, UserName=user["UserName"])
-        iam.delete_group_policy(GroupName=names.promoters_group, PolicyName="assume-model-promoter")
-        iam.delete_group(GroupName=names.promoters_group)
-    except iam.exceptions.NoSuchEntityException:
-        pass
+    for role in (names.execution_role, names.studio_role, *LEGACY_ROLES):
+        delete_role(iam, role)
+    delete_group(iam, LEGACY_GROUP)
 
     bucket = session.resource("s3").Bucket(names.bucket)
     try:

@@ -1,6 +1,6 @@
 """Make all the resources that the pipelines use: the S3 bucket and data, the IAM
-roles, the Model Registry group and the Studio domain. You can run the
-script again. It does not make a second copy of a resource.
+roles, the Model Registry group and the Studio domain. You can run the script
+again. It does not make a second copy of a resource.
 
     python deploy/setup_infra.py
 """
@@ -12,80 +12,26 @@ import time
 
 from botocore.exceptions import ClientError
 
-from common import CHAMPION, PREVIOUS_CHAMPION, ROOT, get_names, get_session, role_arn
+from common import ROOT, get_names, get_session, role_arn
 
 
 def trust(principal: dict) -> dict:
     return {"Version": "2012-10-17", "Statement": [{"Effect": "Allow", "Principal": principal, "Action": "sts:AssumeRole"}]}
 
 
-def policy(*statements: dict) -> dict:
-    return {"Version": "2012-10-17", "Statement": list(statements)}
-
-
-def build_policies(names) -> dict:
-    """Return the IAM policies. These policies control who can promote a model."""
-    packages = f"{names.model_package_arn_prefix}/*"
+def bucket_policy(names) -> dict:
+    """Read and write access to the project bucket. The Kedro catalog and the code upload use it."""
     bucket_arn = f"arn:aws:s3:::{names.bucket}"
-    pipelines = [
-        f"arn:aws:sagemaker:{names.region}:{names.account}:pipeline/{name}*"
-        for name in (names.train_pipeline, names.inference_pipeline)
-    ]
-
-    read_only = {
-        "Sid": "ReadRegistryAndPipelines",
-        "Effect": "Allow",
-        "Action": ["sagemaker:List*", "sagemaker:Describe*", "sagemaker:Search"],
-        "Resource": "*",
-    }
-    # An explicit deny is stronger than an allow. Thus, these roles cannot set an
-    # alias or approve a version, also when a broad managed policy is attached.
-    # The deny applies only to the alias keys. SageMaker Pipelines adds its own
-    # tags to the group when it registers a model, and that must continue to work.
-    cannot_promote = [
-        {
-            "Sid": "OnlyPromotersMoveAliases",
-            "Effect": "Deny",
-            "Action": ["sagemaker:AddTags", "sagemaker:DeleteTags"],
-            "Resource": names.model_group_arn,
-            "Condition": {"ForAnyValue:StringEquals": {"aws:TagKeys": [CHAMPION, PREVIOUS_CHAMPION]}},
-        },
-        {"Sid": "OnlyPromotersApprove", "Effect": "Deny", "Action": "sagemaker:UpdateModelPackage", "Resource": packages},
-    ]
-
     return {
-        "promoter": policy(
-            read_only,
+        "Version": "2012-10-17",
+        "Statement": [
             {
-                "Sid": "MoveModelAliases",
+                "Sid": "ProjectBucket",
                 "Effect": "Allow",
-                "Action": "sagemaker:AddTags",
-                "Resource": names.model_group_arn,
-                "Condition": {"ForAllValues:StringEquals": {"aws:TagKeys": [CHAMPION, PREVIOUS_CHAMPION]}},
-            },
-            {"Sid": "ApproveOrRejectVersions", "Effect": "Allow", "Action": "sagemaker:UpdateModelPackage", "Resource": packages},
-        ),
-        "data_scientist": policy(
-            read_only,
-            {
-                "Sid": "RunPipelines",
-                "Effect": "Allow",
-                "Action": ["sagemaker:StartPipelineExecution", "sagemaker:StopPipelineExecution"],
-                "Resource": pipelines,
-            },
-            {"Sid": "ReadArtifacts", "Effect": "Allow", "Action": ["s3:GetObject", "s3:ListBucket"], "Resource": [bucket_arn, f"{bucket_arn}/*"]},
-            *cannot_promote,
-        ),
-        "execution": policy(
-            {"Sid": "Artifacts", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"], "Resource": [bucket_arn, f"{bucket_arn}/*"]},
-            *cannot_promote,
-        ),
-        # Studio users can see the pipelines and the registry, and run pipelines.
-        # They get the same denies as data scientists. Thus, they cannot promote.
-        "studio": policy(
-            {"Sid": "Artifacts", "Effect": "Allow", "Action": ["s3:GetObject", "s3:PutObject", "s3:ListBucket"], "Resource": [bucket_arn, f"{bucket_arn}/*"]},
-            *cannot_promote,
-        ),
+                "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:ListBucket"],
+                "Resource": [bucket_arn, f"{bucket_arn}/*"],
+            }
+        ],
     }
 
 
@@ -99,9 +45,10 @@ def ensure_bucket(session, names) -> None:
         Bucket=names.bucket,
         PublicAccessBlockConfiguration={"BlockPublicAcls": True, "IgnorePublicAcls": True, "BlockPublicPolicy": True, "RestrictPublicBuckets": True},
     )
-    s3.upload_file(str(ROOT / "data/01_raw/iris.csv"), names.bucket, "data/raw/iris.csv")
-    s3.upload_file(str(ROOT / "data/01_raw/iris_batch.csv"), names.bucket, "data/inference/iris_batch.csv")
-    print(f"bucket   s3://{names.bucket} (data uploaded)")
+    # The same layout as the local data folder. conf/sagemaker/globals.yml sets data_root to s3://<bucket>/data.
+    s3.upload_file(str(ROOT / "data/01_raw/iris.csv"), names.bucket, "data/01_raw/iris.csv")
+    s3.upload_file(str(ROOT / "data/01_raw/iris_batch.csv"), names.bucket, "data/01_raw/iris_batch.csv")
+    print(f"bucket   s3://{names.bucket} (data uploaded to data/01_raw)")
 
 
 def ensure_role(iam, name: str, trust_policy: dict, description: str, inline: dict, managed: tuple = ()) -> None:
@@ -115,28 +62,12 @@ def ensure_role(iam, name: str, trust_policy: dict, description: str, inline: di
     print(f"role     {name}")
 
 
-def ensure_promoters_group(iam, names) -> None:
-    """Make the IAM group of authorized users. Only members of this group can promote."""
-    try:
-        iam.create_group(GroupName=names.promoters_group)
-    except iam.exceptions.EntityAlreadyExistsException:
-        pass
-    iam.put_group_policy(
-        GroupName=names.promoters_group,
-        PolicyName="assume-model-promoter",
-        PolicyDocument=json.dumps(
-            policy({"Effect": "Allow", "Action": "sts:AssumeRole", "Resource": role_arn(names, names.promoter_role)})
-        ),
-    )
-    print(f"group    {names.promoters_group}")
-
-
 def ensure_model_group(session, names) -> None:
     sagemaker = session.client("sagemaker")
     try:
         sagemaker.create_model_package_group(
             ModelPackageGroupName=names.model_group,
-            ModelPackageGroupDescription="Iris classifier. The 'champion' tag contains the version that inference uses.",
+            ModelPackageGroupDescription="Iris classifier. The 'champion' tag of the group contains the version that evaluate and inference use.",
         )
     except ClientError as error:
         if "already exists" not in str(error):
@@ -181,41 +112,25 @@ def main() -> None:
     session = get_session()
     names = get_names(session)
     iam = session.client("iam")
-    policies = build_policies(names)
-    account_principals = {"AWS": f"arn:aws:iam::{names.account}:root"}
+    sagemaker_full_access = "arn:aws:iam::aws:policy/AmazonSageMakerFullAccess"
 
     ensure_bucket(session, names)
     ensure_role(
         iam,
         names.execution_role,
         trust({"Service": "sagemaker.amazonaws.com"}),
-        "Runs the iris demo SageMaker pipelines. Cannot promote a model.",
-        policies["execution"],
-        managed=("arn:aws:iam::aws:policy/AmazonSageMakerFullAccess",),
+        "Runs the iris demo SageMaker pipelines. The Kedro jobs register models and set the champion tag.",
+        bucket_policy(names),
+        managed=(sagemaker_full_access,),
     )
-    ensure_role(
-        iam,
-        names.promoter_role,
-        trust(account_principals),
-        "Authorized to promote a model version to champion.",
-        policies["promoter"],
-    )
-    ensure_role(
-        iam,
-        names.data_scientist_role,
-        trust(account_principals),
-        "Can run pipelines and read the registry, but not promote.",
-        policies["data_scientist"],
-    )
-    ensure_promoters_group(iam, names)
     ensure_model_group(session, names)
     ensure_role(
         iam,
         names.studio_role,
         trust({"Service": "sagemaker.amazonaws.com"}),
-        "SageMaker Studio users: view and run pipelines, browse the registry. Cannot promote.",
-        policies["studio"],
-        managed=("arn:aws:iam::aws:policy/AmazonSageMakerFullAccess",),
+        "SageMaker Studio users: view and run pipelines, browse the registry.",
+        bucket_policy(names),
+        managed=(sagemaker_full_access,),
     )
     time.sleep(10)  # wait until AWS makes the new role available to the domain
     ensure_studio(session, names)

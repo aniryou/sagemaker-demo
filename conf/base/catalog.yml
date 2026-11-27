@@ -1,3 +1,8 @@
+# The catalog is the same on your computer and on SageMaker. `data_root` comes
+# from globals.yml: the local data folder here, an S3 prefix in conf/sagemaker.
+# conf/sagemaker/catalog.yml replaces `model` and `evaluation` with the Model
+# Registry datasets.
+
 iris_raw:
   type: iris_demo.datasets.CSVDataset
   filepath: ${globals:data_root}/01_raw/iris.csv

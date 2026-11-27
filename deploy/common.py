@@ -12,16 +12,20 @@ ROOT = Path(__file__).resolve().parents[1]
 PREFIX = "iris-demo"
 _AWS_KEYS = ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION")
 
-# These tags on the model package group contain a model version. The challenger
-# has no tag: it is the newest version with the status PendingManualApproval.
-CHAMPION, PREVIOUS_CHAMPION = "champion", "previous_champion"
+# The Kedro pipelines that the SageMaker pipelines run. The SageMaker pipeline of
+# `train` is `iris-demo-train`, and so on.
+PIPELINES = ("train", "evaluate", "inference")
+
+# This tag on the model package group contains the version that evaluate and
+# inference use: champion=<version>. The Kedro datasets set and read it.
+CHAMPION = "champion"
 
 
 def load_aws_env() -> None:
-    """Export only the AWS_* entries of .env. The file also contains other secrets.
+    """Export only the AWS_* entries of .env. The file can also contain other secrets.
 
     If the environment already has credentials or a profile, this function does
-    not read .env. Thus, `AWS_PROFILE=promoter python deploy/promote.py ...` works.
+    not read .env. Thus, `AWS_PROFILE=other python deploy/pipelines.py ...` works.
     """
     env_file = ROOT / ".env"
     if not env_file.exists() or os.environ.get("AWS_ACCESS_KEY_ID") or os.environ.get("AWS_PROFILE"):
@@ -49,12 +53,8 @@ def get_names(session: boto3.Session) -> SimpleNamespace:
         model_group=group,
         model_group_arn=f"arn:aws:sagemaker:{region}:{account}:model-package-group/{group}",
         model_package_arn_prefix=f"arn:aws:sagemaker:{region}:{account}:model-package/{group}",
-        train_pipeline=f"{PREFIX}-train",
-        inference_pipeline=f"{PREFIX}-inference",
+        pipelines={name: f"{PREFIX}-{name}" for name in PIPELINES},
         execution_role=f"{PREFIX}-sagemaker-execution",
-        promoter_role=f"{PREFIX}-model-promoter",
-        data_scientist_role=f"{PREFIX}-data-scientist",
-        promoters_group=f"{PREFIX}-model-promoters",
         studio_role=f"{PREFIX}-studio-user",
         studio_domain=f"{PREFIX}-studio",
         studio_user="default-user",

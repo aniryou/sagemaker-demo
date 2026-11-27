@@ -5,3 +5,5 @@ numpy<2
 pandas<2.3
 boto3
 sagemaker>=2.230,<3
+pytest
+kedro-viz
