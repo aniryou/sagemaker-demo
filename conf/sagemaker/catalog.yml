@@ -1,20 +1,25 @@
 # On SageMaker, the model and its metrics live in the Model Registry. The other
 # datasets keep their entries from conf/base, with data_root on S3.
+#
+# `model_tag` selects the group tag that a run works with. The default is
+# champion: train registers the champion, evaluate and inference use it. A run
+# with `kedro run --params model_tag=challenger` registers, evaluates or scores
+# with the challenger instead, and the champion does not change.
 
 model:
   type: iris_demo.datasets.SageMakerModelDataset
   model_package_group: ${globals:model_package_group}
   model_data_uri: ${globals:model_data_uri}
   save_args:
-    tag: champion
+    tag: ${runtime_params:model_tag, champion}
     approval_status: Approved
   load_args:
-    tag: champion
+    tag: ${runtime_params:model_tag, champion}
 
 evaluation:
   type: iris_demo.datasets.SageMakerModelMetricsDataset
   model_package_group: ${globals:model_package_group}
   save_args:
-    tag: champion
+    tag: ${runtime_params:model_tag, champion}
   load_args:
-    tag: champion
+    tag: ${runtime_params:model_tag, champion}

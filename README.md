@@ -92,8 +92,11 @@ sequenceDiagram
   single version. The group has one `champion` tag, thus only one champion
   exists. The datasets have `save_args` and `load_args` with a `tag`
   parameter. This project saves with `champion` and loads `champion`.
-- **Train always sets the champion.** Evaluate and inference always use the
-  champion. There is no manual promotion step.
+- **Train sets the champion by default.** Evaluate and inference use the
+  champion by default. The Kedro runtime parameter `model_tag` selects another
+  tag for one run: `KedroParams=model_tag=challenger` registers a challenger
+  and leaves the champion as it is, evaluates the challenger, or scores with
+  it. `python deploy/registry.py promote <version>` moves the champion tag.
 
 ## Kedro pipelines
 
@@ -132,6 +135,12 @@ python deploy/pipelines.py run train -p KedroParams=model.n_estimators=200,model
 python deploy/pipelines.py run evaluate     # store the metrics of the champion in the registry
 python deploy/pipelines.py run inference    # score with the champion
 
+python deploy/pipelines.py run train -p KedroParams=model_tag=challenger      # register a challenger, champion unchanged
+python deploy/pipelines.py run evaluate -p KedroParams=model_tag=challenger   # store the metrics of the challenger
+python deploy/pipelines.py run inference -p KedroParams=model_tag=challenger  # shadow test with the challenger
+python deploy/registry.py list                                                # versions, tags, metrics
+python deploy/registry.py promote 2                                           # champion = version 2
+
 python deploy/teardown.py --yes             # delete all project resources
 ```
 
@@ -157,6 +166,7 @@ src/iris_demo        Kedro pipelines: data_processing, training, evaluation, inf
 src/iris_demo/datasets   SageMakerModelDataset, SageMakerModelMetricsDataset
 deploy/build_image.py    build the image, push it to ECR
 deploy/pipelines.py  SageMaker pipeline definitions, the deploy and run commands
+deploy/registry.py   list the model versions, promote a challenger
 deploy/setup_infra.py, teardown.py
 tests                unit tests with a stubbed SageMaker client
 docs/architecture    diagram spec and renderer (aniryou/drawing-skills architecture-skill)

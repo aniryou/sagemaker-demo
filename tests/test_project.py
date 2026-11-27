@@ -47,3 +47,13 @@ def test_sagemaker_environment_needs_the_bucket_variable(monkeypatch):
     with KedroSession.create(project_path=ROOT, env="sagemaker") as session:
         with pytest.raises(Exception, match="IRIS_BUCKET"):
             session.load_context().catalog.get("iris_raw")
+
+
+def test_model_tag_runtime_parameter_selects_the_challenger(monkeypatch):
+    monkeypatch.setenv("IRIS_BUCKET", "my-bucket")
+    bootstrap_project(ROOT)
+    with KedroSession.create(project_path=ROOT, env="sagemaker", runtime_params={"model_tag": "challenger"}) as session:
+        catalog = session.load_context().catalog
+        assert catalog.get("model")._describe()["save_args"] == {"tag": "challenger", "approval_status": "Approved"}
+        assert catalog.get("model")._describe()["load_args"] == {"tag": "challenger"}
+        assert catalog.get("evaluation")._describe()["save_args"] == {"tag": "challenger"}
