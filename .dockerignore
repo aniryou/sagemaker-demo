@@ -1,0 +1,14 @@
+.git
+.venv
+.viz
+__pycache__
+*.pyc
+*.egg-info
+.idea
+.env
+.env.*
+conf/local
+data
+deploy
+docs
+tests
