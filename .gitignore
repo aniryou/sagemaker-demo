@@ -8,3 +8,4 @@ data/*
 !data/01_raw/
 .idea/
 uv.lock
+.viz/

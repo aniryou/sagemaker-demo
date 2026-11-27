@@ -1,20 +1,18 @@
-"""Register the project pipelines."""
+"""Register the project pipelines.
+
+`train`, `evaluate` and `inference` are the pipelines that the SageMaker pipelines
+run. Each SageMaker pipeline runs `kedro run --env sagemaker --pipeline <name>`.
+"""
 
 from __future__ import annotations
 
+from kedro.framework.project import find_pipelines
 from kedro.pipeline import Pipeline
-
-from iris_demo.pipelines import data_processing, data_science, inference
 
 
 def register_pipelines() -> dict[str, Pipeline]:
-    processing = data_processing.create_pipeline()
-    science = data_science.create_pipeline()
-    return {
-        "data_processing": processing,
-        "data_science": science,
-        "training": science.only_nodes("train_model"),  # SageMaker Train step
-        "evaluation": science.only_nodes("evaluate_model"),  # SageMaker Evaluate step
-        "inference": inference.create_pipeline(),
-        "__default__": processing + science,
-    }
+    pipelines = find_pipelines()  # data_processing, training, evaluation, inference
+    pipelines["train"] = pipelines["data_processing"] + pipelines["training"]
+    pipelines["evaluate"] = pipelines["data_processing"] + pipelines["evaluation"]
+    pipelines["__default__"] = pipelines["train"] + pipelines["evaluation"]
+    return pipelines

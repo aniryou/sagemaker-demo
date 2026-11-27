@@ -1,3 +1,6 @@
-# In a SageMaker job, each step puts its S3 inputs and outputs below this root.
-# Thus, the catalog is the same on your computer and on SageMaker.
-data_root: /opt/ml/processing/data
+# deploy/pipelines.py puts IRIS_BUCKET into the environment of each SageMaker job.
+# Thus, on SageMaker the catalog reads and writes S3, and on your computer it
+# reads and writes the local data folder.
+data_root: s3://${oc.env:IRIS_BUCKET}/data
+model_data_uri: s3://${oc.env:IRIS_BUCKET}/models
+model_package_group: iris-demo-models

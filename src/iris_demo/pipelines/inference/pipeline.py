@@ -8,7 +8,7 @@ def create_pipeline(**kwargs) -> Pipeline:
         [
             node(
                 predict,
-                inputs=["model", "inference_input", "params:features", "params:model_version"],
+                inputs=["model", "inference_input", "params:features"],
                 outputs="predictions",
                 name="predict",
             ),

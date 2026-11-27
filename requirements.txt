@@ -1,6 +1,9 @@
 # Each SageMaker job installs these packages when it starts. The job uses the
-# scikit-learn 1.2-1 container (Python 3.9). The image contains pandas, numpy,
-# scikit-learn and joblib. Do not upgrade them. A newer version causes errors
-# in the compiled numpy packages of the image.
+# scikit-learn 1.2-1 container. The image contains pandas, numpy, scikit-learn,
+# joblib and boto3. Do not upgrade pandas, numpy or scikit-learn. A newer version
+# causes errors in the compiled numpy packages of the image.
 kedro==1.0.0
 kedro-datasets==4.1.0
+# s3fs lets fsspec, and thus the Kedro catalog, read and write S3. Pip moves
+# boto3 and botocore to the versions that s3fs requires. They are pure Python.
+s3fs

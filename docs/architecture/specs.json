@@ -1,9 +1,9 @@
 [
  {
   "key": "iris-demo",
-  "title": "Kedro iris on SageMaker — champion / challenger",
-  "subtitle": "Every compute step runs `kedro run --env sagemaker`. Training registers a challenger; Score reads the champion tag that only the promoter role can set. Snowflake and the schedule are target design (deployed today: S3, on-demand runs).",
-  "desc": "A data scientist starts the train pipeline (Preprocess, Train, Evaluate). A model that passes the quality gate is registered pending approval; the newest pending version is the challenger. An authorized promoter assumes the promoter IAM role to approve it and set the champion tag. On a schedule, the Score job reads the champion tag, downloads that model, scores a batch and writes predictions back to Snowflake.",
+  "title": "Kedro iris on SageMaker — three pipelines, one Model Registry",
+  "subtitle": "Each SageMaker pipeline is one Processing step: `kedro run --env sagemaker --pipeline <name>`. The Kedro catalog does all I/O. Snowflake and the schedule are target design.",
+  "desc": "A data scientist starts the train pipeline. Kedro reads iris.csv from S3 through its catalog, trains the model, writes the joblib file to S3, registers it as a new version in the Model Registry and sets the champion tag of the group to that version. The evaluate pipeline loads the champion, scores the fixed test split and stores the metrics as metadata of the version. On a schedule, the inference pipeline loads the champion, scores a batch and writes the predictions through the catalog.",
   "size": {
    "w": 1560,
    "h": 800
@@ -11,101 +11,74 @@
   "nodes": [
    {
     "key": "ds",
-    "x": 70,
-    "y": 210,
+    "x": 90,
+    "y": 230,
     "icon": "user",
     "title": "Data scientist",
-    "sub": "starts training",
-    "label": "below"
-   },
-   {
-    "key": "pre",
-    "x": 300,
-    "y": 210,
-    "icon": "sagemaker",
-    "title": "Preprocess",
-    "sub": "Processing · t3.medium",
+    "sub": "starts train and evaluate",
     "label": "below"
    },
    {
     "key": "train",
-    "x": 510,
-    "y": 210,
-    "icon": "sagemaker_training",
-    "title": "Train",
-    "sub": "Training job · m5.large",
-    "label": "below"
-   },
-   {
-    "key": "eval",
-    "x": 720,
-    "y": 210,
+    "x": 380,
+    "y": 230,
     "icon": "sagemaker",
-    "title": "Evaluate",
-    "sub": "accuracy ≥ threshold",
+    "title": "iris-demo-train",
+    "sub": "Processing · kedro run -p train",
     "label": "below"
    },
    {
-    "key": "reg",
-    "x": 950,
-    "y": 500,
-    "icon": "sagemaker_model",
-    "title": "Model Registry",
-    "sub": "iris-demo-models",
+    "key": "evaluate",
+    "x": 680,
+    "y": 230,
+    "icon": "sagemaker",
+    "title": "iris-demo-evaluate",
+    "sub": "Processing · kedro run -p evaluate",
     "label": "below"
    },
    {
-    "key": "iam",
-    "x": 1200,
-    "y": 500,
-    "icon": "iam",
-    "title": "Promoter role",
-    "sub": "only role allowed to promote",
-    "label": "below"
-   },
-   {
-    "key": "promoter",
-    "x": 1440,
-    "y": 500,
-    "icon": "user",
-    "title": "Model promoter",
-    "sub": "promote.py",
-    "label": "below"
-   },
-   {
-    "key": "studio",
-    "x": 1200,
-    "y": 680,
-    "icon": "sagemaker_notebook",
-    "title": "SageMaker Studio",
-    "sub": "browse, cannot promote",
+    "key": "inference",
+    "x": 980,
+    "y": 230,
+    "icon": "sagemaker",
+    "title": "iris-demo-inference",
+    "sub": "Processing · kedro run -p inference",
     "label": "below"
    },
    {
     "key": "scheduler",
-    "x": 330,
-    "y": 500,
+    "x": 1290,
+    "y": 230,
     "icon": "eventbridge",
     "title": "Scheduled job",
-    "sub": "EventBridge Scheduler",
+    "sub": "EventBridge Scheduler (target)",
     "label": "below"
    },
    {
-    "key": "score",
-    "x": 560,
-    "y": 680,
-    "icon": "sagemaker",
-    "title": "Score",
-    "sub": "Processing · reads champion tag",
+    "key": "s3",
+    "x": 530,
+    "y": 590,
+    "icon": "s3",
+    "title": "S3 bucket",
+    "sub": "data/ · catalog data_root (target: Snowflake)",
     "label": "below"
    },
    {
-    "key": "sf",
-    "x": 80,
-    "y": 680,
-    "icon": "snowflake",
-    "title": "Snowflake",
-    "sub": "IRIS · PREDICTIONS",
+    "key": "reg",
+    "x": 830,
+    "y": 590,
+    "icon": "sagemaker_model",
+    "title": "Model Registry",
+    "sub": "iris-demo-models · tag champion=N · metrics",
+    "label": "below"
+   },
+   {
+    "key": "studio",
+    "x": 1290,
+    "y": 590,
+    "icon": "sagemaker_notebook",
+    "title": "SageMaker Studio",
+    "sub": "pipeline graphs · registry",
     "label": "below"
    }
   ],
@@ -114,33 +87,23 @@
     "label": "AWS account · us-west-2",
     "dashed": false,
     "nodes": [
-     "pre",
      "train",
-     "eval",
-     "reg",
-     "iam",
-     "studio",
+     "evaluate",
+     "inference",
      "scheduler",
-     "score"
+     "s3",
+     "reg",
+     "studio"
     ],
     "pad": 70
    },
    {
-    "label": "iris-demo-train pipeline",
+    "label": "SageMaker Pipelines · one Processing step each",
     "dashed": true,
     "nodes": [
-     "pre",
      "train",
-     "eval"
-    ],
-    "pad": 22
-   },
-   {
-    "label": "Scheduled inference",
-    "dashed": true,
-    "nodes": [
-     "scheduler",
-     "score"
+     "evaluate",
+     "inference"
     ],
     "pad": 22
    }
@@ -148,7 +111,7 @@
   "edges": [
    {
     "s": "ds",
-    "d": "pre",
+    "d": "train",
     "kind": "req",
     "label": "start",
     "n": "1",
@@ -157,82 +120,155 @@
     "via": null
    },
    {
-    "s": "sf",
-    "d": "pre",
+    "s": "train",
+    "d": "s3",
     "kind": "sup",
-    "label": "read IRIS",
+    "label": "read iris.csv · write model.joblib",
     "n": null,
-    "ss": "tr",
-    "ds": "b",
+    "ss": "b",
+    "ds": "l",
     "via": [
      [
-      230,
-      656
-     ],
-     [
-      230,
-      320
-     ],
-     [
-      300,
-      320
+      380,
+      590
      ]
     ]
-   },
-   {
-    "s": "pre",
-    "d": "train",
-    "kind": "req",
-    "label": "train/test",
-    "n": "2",
-    "ss": null,
-    "ds": null,
-    "via": null
    },
    {
     "s": "train",
-    "d": "eval",
-    "kind": "req",
-    "label": "model",
-    "n": "3",
-    "ss": null,
-    "ds": null,
-    "via": null
-   },
-   {
-    "s": "eval",
     "d": "reg",
     "kind": "req",
-    "label": "register challenger",
-    "n": "4",
-    "ss": "r",
+    "label": "register version N · champion = N",
+    "n": "2",
+    "ss": "b",
     "ds": "t",
     "via": [
      [
-      950,
-      210
+      380,
+      440
+     ],
+     [
+      780,
+      440
      ]
     ]
    },
    {
-    "s": "promoter",
-    "d": "iam",
-    "kind": "id",
-    "label": "assume",
+    "s": "ds",
+    "d": "evaluate",
+    "kind": "req",
+    "label": "start",
+    "n": "3",
+    "ss": "t",
+    "ds": "t",
+    "via": [
+     [
+      90,
+      120
+     ],
+     [
+      680,
+      120
+     ]
+    ]
+   },
+   {
+    "s": "evaluate",
+    "d": "reg",
+    "kind": "req",
+    "label": "load champion · store metrics",
+    "n": "4",
+    "ss": "b",
+    "ds": "t",
+    "via": [
+     [
+      680,
+      480
+     ],
+     [
+      830,
+      480
+     ]
+    ]
+   },
+   {
+    "s": "evaluate",
+    "d": "s3",
+    "kind": "sup",
+    "label": "read iris.csv",
+    "n": null,
+    "ss": "b",
+    "ds": "t",
+    "via": [
+     [
+      680,
+      400
+     ],
+     [
+      580,
+      400
+     ]
+    ]
+   },
+   {
+    "s": "scheduler",
+    "d": "inference",
+    "kind": "req",
+    "label": "start",
     "n": "5",
     "ss": "l",
     "ds": "r",
     "via": null
    },
    {
-    "s": "iam",
+    "s": "inference",
     "d": "reg",
     "kind": "req",
-    "label": "champion",
+    "label": "load champion",
     "n": "6",
-    "ss": "l",
+    "ss": "b",
+    "ds": "t",
+    "via": [
+     [
+      980,
+      440
+     ],
+     [
+      880,
+      440
+     ]
+    ]
+   },
+   {
+    "s": "inference",
+    "d": "s3",
+    "kind": "req",
+    "label": "read iris_batch.csv · write predictions.csv",
+    "n": "7",
+    "ss": "b",
     "ds": "r",
-    "via": null
+    "via": [
+     [
+      980,
+      500
+     ],
+     [
+      1150,
+      500
+     ],
+     [
+      1150,
+      700
+     ],
+     [
+      650,
+      700
+     ],
+     [
+      650,
+      590
+     ]
+    ]
    },
    {
     "s": "studio",
@@ -240,59 +276,6 @@
     "kind": "sup",
     "label": "browse",
     "n": null,
-    "ss": "l",
-    "ds": "br",
-    "via": [
-     [
-      1080,
-      680
-     ],
-     [
-      1080,
-      522
-     ]
-    ]
-   },
-   {
-    "s": "scheduler",
-    "d": "score",
-    "kind": "req",
-    "label": "start",
-    "n": "7",
-    "ss": "r",
-    "ds": "t",
-    "via": [
-     [
-      560,
-      500
-     ]
-    ]
-   },
-   {
-    "s": "score",
-    "d": "reg",
-    "kind": "req",
-    "label": "read champion",
-    "n": "8",
-    "ss": "r",
-    "ds": "l",
-    "via": [
-     [
-      760,
-      680
-     ],
-     [
-      760,
-      500
-     ]
-    ]
-   },
-   {
-    "s": "score",
-    "d": "sf",
-    "kind": "req",
-    "label": "write predictions",
-    "n": "9",
     "ss": "l",
     "ds": "r",
     "via": null
